@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visualisatie 4 – Agent-loop</title>
+<style>
+  /* Zelfde stijlvariabelen als visualisatie 1–3, zodat ze later samen te stylen zijn. */
+  :root {
+    --bg: #0f1115;
+    --box-fill: #171a21;
+    --chip-fill: #20242d;
+    --box-stroke: #3a4150;
+    --box-glow: #8fb4ff;
+    --label: #c9ced8;
+    --output-text: #eef1f6;
+    --human: #eef1f6;   /* tekst van jou */
+    --model: #8fb4ff;   /* tekst van het model */
+    --world: #ffb454;   /* resultaat van een actie */
+    --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<script>
+/*
+  Stappen (pijl rechts / PageDown / klik = volgende, pijl links / PageUp = vorige, P = pauze):
+    1. Heen en weer verkeer: jij → tekst in → LLM → tekst uit → jij
+    2. Pauze: alles bevriest ('Waar dit echt bijzonder wordt…')
+    3. De loop: doel erin, daarna lezen → schrijven → actie → herhaal, steeds sneller
+    4. Er verschijnt een kader om de loop: 'Agent'
+    5. De agent maakt zijn ronde af, is klaar en geeft het resultaat aan jou
+  Van buitenaf: window.scene.setStep(n).
+*/
+(() => {
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d');
+  const css = getComputedStyle(document.documentElement);
+  const v = name => css.getPropertyValue(name).trim();
+  const C = {
+    boxFill: v('--box-fill'), chipFill: v('--chip-fill'), boxStroke: v('--box-stroke'),
+    glow: v('--box-glow'), label: v('--label'), outText: v('--output-text'), font: v('--font'),
+    kind: { human: v('--human'), model: v('--model'), world: v('--world') },
+  };
+  const STEPS = 5;
+
+  // Alles wordt getekend in een vast 1920×1080-ontwerpvlak dat naar het scherm schaalt.
+  // Jij + Agent-kader samen staan gecentreerd (x 145–1780, y 227–860).
+  const LLM = { x: 830, y: 500, w: 260, h: 260 };
+  const ACT = { x: 1550, y: 500, w: 220, h: 220 };
+  const HUMAN = { x: 200, y: 500 };
+  const FRAME = { x: 580, y: 290, w: 1200, h: 570 };
+  const LABEL_Y = 336; // namen boven de blokken, op één lijn
+  const LOOP_Y = 780;  // onderkant van de loop
+  const left = b => b.x - b.w / 2, right = b => b.x + b.w / 2;
+
+  // ---- Paden met afgeronde hoeken, waar tekstblokjes over bewegen ----
+  function makePath(pts, r = 0) {
+    const out = [pts[0]];
+    const dist = (a, b) => Math.hypot(b[0] - a[0], b[1] - a[1]);
+    for (let i = 1; i < pts.length - 1; i++) {
+      const [p0, p1, p2] = [pts[i - 1], pts[i], pts[i + 1]];
+      const d1 = dist(p0, p1), d2 = dist(p1, p2), rr = Math.min(r, d1 / 2, d2 / 2);
+      const a = [p1[0] + ((p0[0] - p1[0]) * rr) / d1, p1[1] + ((p0[1] - p1[1]) * rr) / d1];
+      const b = [p1[0] + ((p2[0] - p1[0]) * rr) / d2, p1[1] + ((p2[1] - p1[1]) * rr) / d2];
+      for (let k = 0; k <= 12; k++) {
+        const t = k / 12, u = 1 - t;
+        out.push([u * u * a[0] + 2 * u * t * p1[0] + t * t * b[0], u * u * a[1] + 2 * u * t * p1[1] + t * t * b[1]]);
+      }
+    }
+    out.push(pts[pts.length - 1]);
+    const L = [0];
+    for (let i = 1; i < out.length; i++) L.push(L[i - 1] + dist(out[i - 1], out[i]));
+    return { pts: out, L, total: L[L.length - 1] };
+  }
+  function pointAt(path, t) {
+    const d = Math.max(0, Math.min(1, t)) * path.total;
+    let i = 1;
+    while (i < path.L.length - 1 && path.L[i] < d) i++;
+    const f = (d - path.L[i - 1]) / (path.L[i] - path.L[i - 1] || 1);
+    const a = path.pts[i - 1], b = path.pts[i];
+    return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+  }
+
+  const P = {
+    // Twee banen tussen jou en het model.
+    chatIn: makePath([[HUMAN.x + 70, 470], [left(LLM), 470]]),
+    chatOut: makePath([[left(LLM), 530], [HUMAN.x + 70, 530]]),
+    // De loop: model → actie, en het resultaat buigt terug naar de ingang van het model.
+    // De loop: model → actie, en het resultaat loopt onderlangs terug, het model in.
+    loopOut: makePath([[right(LLM), LLM.y], [left(ACT), ACT.y]]),
+    loopBack: makePath([[ACT.x, ACT.y + ACT.h / 2], [ACT.x, LOOP_Y], [LLM.x, LOOP_Y], [LLM.x, LLM.y + LLM.h / 2]], 50),
+    // Stap 5: het eindresultaat gaat de agent uit, terug naar jou.
+    result: makePath([[left(LLM), 565], [HUMAN.x + 240, 565]]), // eindigt buiten het Agent-kader
+  };
+
+  let W, H, S, dpr, time = 0, step = 1, paused = false;
+  let ping, loop, agent = 0;
+  const glow = { llm: 0, act: 0, human: 0, cap1: 0, cap2: 0, cap3: 0 };
+
+  const smooth = t => t * t * (3 - 2 * t);
+  const clamp01 = t => Math.max(0, Math.min(1, t));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const approach = (x, target, dt, dur) => x + Math.sign(target - x) * Math.min(Math.abs(target - x), dt / dur);
+
+  // ---- Toestand: 'heen en weer' (stap 1–2) en 'loop' (stap 3–5) ----
+  function resetPing() {
+    ping = { phase: 'send', t: 0, chip: { path: P.chatIn, kind: 'human', t: 0 } };
+    loop = null;
+  }
+  function startLoop() {
+    loop = {
+      phase: 'goal', t: 0, sp: 1, reveal: 0, afterGoal: 0, pingFade: 1, finish: false, done: 0,
+      chip: { path: P.chatIn, kind: 'human', t: 0, label: 'Doel' },
+    };
+  }
+
+  // Duur van elke fase (s). In de loop gaat alles steeds iets sneller (sp).
+  const PING = { send: 1.0, think: 0.7, reply: 1.0, read: 0.9 };
+  const LOOP = { goal: 1.1, think: 0.7, out: 0.8, act: 0.7, back: 2.2, result: 1.4 };
+
+  function updatePing(dt) {
+    const p = ping;
+    p.t += dt;
+    if (p.chip) p.chip.t = clamp01(p.t / PING[p.phase]);
+    if (p.phase === 'think') glow.llm = 1;
+    if (p.phase === 'read') glow.human = 1;
+    if (p.t < PING[p.phase]) return;
+    p.t = 0;
+    if (p.phase === 'send') { p.phase = 'think'; p.chip = null; }
+    else if (p.phase === 'think') { p.phase = 'reply'; p.chip = { path: P.chatOut, kind: 'model', t: 0 }; }
+    else if (p.phase === 'reply') { p.phase = 'read'; p.chip = null; }
+    else { p.phase = 'send'; p.chip = { path: P.chatIn, kind: 'human', t: 0 }; }
+  }
+
+  function updateLoop(dt) {
+    const l = loop;
+    l.reveal = Math.min(1, l.reveal + dt / 1.2);
+    l.pingFade = Math.max(0, l.pingFade - dt / 0.35);
+    if (l.phase !== 'goal') l.afterGoal = Math.min(1, l.afterGoal + dt / 0.8);
+    l.done = approach(l.done, l.phase === 'result' || l.phase === 'idle' ? 1 : 0, dt, 0.6);
+    if (l.phase === 'idle') { glow.human = Math.max(glow.human, 0.6); return; }
+
+    const dur = LOOP[l.phase] / (l.phase === 'goal' || l.phase === 'result' ? 1 : l.sp);
+    l.t += dt;
+    if (l.chip) l.chip.t = clamp01(l.t / dur);
+    if (l.phase === 'think') { glow.llm = 1; glow.cap2 = 1; }
+    if (l.phase === 'out') glow.cap2 = 1;
+    if (l.phase === 'act') { glow.act = 1; glow.cap3 = 1; }
+    if (l.phase === 'back' && l.chip.t > 0.75) glow.cap1 = 1;
+    if (l.phase === 'result' && l.chip.t > 0.85) glow.human = 1;
+    if (l.t < dur) return;
+    l.t = 0;
+    if (l.phase === 'goal' || l.phase === 'back') {
+      if (l.phase === 'back') l.sp = Math.min(1.9, l.sp + 0.12);
+      l.phase = 'think'; l.chip = null;
+    } else if (l.phase === 'think') {
+      // Na het denken: nog een actie, of (stap 5) klaar en het resultaat teruggeven.
+      if (l.finish) { l.phase = 'result'; l.chip = { path: P.result, kind: 'model', t: 0, label: 'Resultaat' }; }
+      else { l.phase = 'out'; l.chip = { path: P.loopOut, kind: 'model', t: 0 }; }
+    }
+    else if (l.phase === 'out') { l.phase = 'act'; l.chip = null; }
+    else if (l.phase === 'act') { l.phase = 'back'; l.chip = { path: P.loopBack, kind: 'world', t: 0 }; }
+    else { l.phase = 'idle'; l.chip.t = 1; } // resultaat blijft bij jou liggen
+  }
+
+  function update(dt) {
+    time += dt;
+    if (loop) updateLoop(dt); else updatePing(dt);
+    for (const k in glow) glow[k] = Math.max(0, glow[k] - dt * 2.2);
+  }
+
+  // ---- Tekenen ----
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  // Een baan: lijn met pijlpunt. 'frac' tekent hem gedeeltelijk (voor het opbouwen).
+  function drawLane(path, alpha, frac = 1) {
+    if (alpha <= 0.01 || frac <= 0) return;
+    const d = frac * path.total;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = C.boxStroke;
+    ctx.lineWidth = 3;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(...path.pts[0]);
+    for (let i = 1; i < path.pts.length; i++) {
+      if (path.L[i] > d) { ctx.lineTo(...pointAt(path, frac)); break; }
+      ctx.lineTo(...path.pts[i]);
+    }
+    ctx.stroke();
+    if (frac > 0.98) {
+      const n = path.pts.length, [x, y] = path.pts[n - 1], [px, py] = path.pts[n - 2];
+      const a = Math.atan2(y - py, x - px);
+      ctx.translate(x, y); ctx.rotate(a);
+      ctx.fillStyle = C.boxStroke;
+      ctx.beginPath(); ctx.moveTo(2, 0); ctx.lineTo(-14, -9); ctx.lineTo(-14, 9); ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Een tekstblokje: pilletje met 'regels tekst' (of een woord), in de kleur van wie het schreef.
+  function drawChip(chip, alpha) {
+    if (!chip || alpha <= 0.01) return;
+    const [x, y] = pointAt(chip.path, smooth(chip.t));
+    const color = C.kind[chip.kind];
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font = `600 24px ${C.font}`;
+    const w = chip.label ? Math.max(96, ctx.measureText(chip.label).width + 30) : 96;
+    roundRect(x - w / 2, y - 22, w, 44, 22);
+    ctx.fillStyle = C.chipFill;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 16 * S;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+    ctx.fillStyle = color;
+    if (chip.label) {
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(chip.label, x, y + 1);
+    } else {
+      roundRect(x - 28, y - 9, 56, 5, 2.5); ctx.fill();
+      roundRect(x - 28, y + 4, 38, 5, 2.5); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawBox(b, alpha, scale, g, accent, label) {
+    if (alpha <= 0.01) return;
+    const w = b.w * scale, h = b.h * scale;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    roundRect(b.x - w / 2, b.y - h / 2, w, h, 24);
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = (16 + 40 * g) * S;
+    ctx.fillStyle = C.boxFill;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = C.boxStroke;
+    ctx.stroke();
+    ctx.globalAlpha = alpha * (0.25 + 0.75 * g);
+    ctx.strokeStyle = accent;
+    ctx.stroke();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = C.label;
+    ctx.font = `500 34px ${C.font}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.textBaseline = 'middle';
+    if (label) ctx.fillText(label, b.x, LABEL_Y);
+    ctx.restore();
+  }
+
+  // Binnenin het LLM: dezelfde stipjes als in visualisatie 1–3, die oplichten tijdens het 'denken'.
+  function drawLLMDots(g) {
+    const n = 5, pad = 50;
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+      const flick = 0.5 + 0.5 * Math.sin(time * 9 + i * 1.7 + j * 2.9);
+      const a = g * flick;
+      ctx.save();
+      ctx.globalAlpha = 0.15 + 0.8 * a;
+      ctx.fillStyle = a > 0.05 ? C.glow : C.boxStroke;
+      ctx.beginPath();
+      ctx.arc(left(LLM) + pad + (i * (LLM.w - 2 * pad)) / (n - 1), LLM.y - LLM.h / 2 + pad + (j * (LLM.h - 2 * pad)) / (n - 1), 4 + 2 * a, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // Binnenin het actie-blok: een bliksemschicht.
+  function drawBolt(alpha, g) {
+    ctx.save();
+    ctx.globalAlpha = alpha * (0.45 + 0.55 * g);
+    ctx.translate(ACT.x, ACT.y);
+    ctx.fillStyle = C.kind.world;
+    ctx.shadowColor = C.kind.world;
+    ctx.shadowBlur = 24 * S * g;
+    ctx.beginPath();
+    [[8, -52], [-30, 8], [-4, 8], [-12, 52], [28, -10], [2, -10], [14, -52]].forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawHuman(alpha, g) {
+    if (alpha <= 0.01) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = C.kind.human;
+    ctx.shadowColor = C.kind.human;
+    ctx.shadowBlur = 24 * S * g;
+    ctx.beginPath(); ctx.arc(HUMAN.x, HUMAN.y - 40, 30, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(HUMAN.x - 55, HUMAN.y + 55);
+    ctx.quadraticCurveTo(HUMAN.x - 55, HUMAN.y, HUMAN.x, HUMAN.y);
+    ctx.quadraticCurveTo(HUMAN.x + 55, HUMAN.y, HUMAN.x + 55, HUMAN.y + 55);
+    ctx.closePath(); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = C.label;
+    ctx.font = `500 34px ${C.font}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText('Jij', HUMAN.x, HUMAN.y + 80);
+    ctx.restore();
+  }
+
+  function text(str, x, y, alpha, size = 28, align = 'center', weight = 500, color = C.label) {
+    if (alpha <= 0.01) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
+    ctx.font = `${weight} ${size}px ${C.font}`;
+    ctx.textAlign = align; ctx.textBaseline = 'middle';
+    ctx.fillText(str, x, y);
+    ctx.restore();
+  }
+
+  function draw() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    const reveal = loop ? smooth(loop.reveal) : 0;
+    const after = loop ? smooth(loop.afterGoal) : 0;
+    const done = loop ? smooth(loop.done) : 0;
+    // Stap 1–2: jij + LLM staan in het midden; bij de loop schuift het beeld mee.
+    const pan = 408 * (1 - reveal);
+    ctx.setTransform(dpr * S, 0, 0, dpr * S, dpr * ((W - 1920 * S) / 2 + pan * S), dpr * (H - 1080 * S) / 2);
+
+    // Banen van 'heen en weer'. In de loop blijft alleen de ingang voor het doel, gedimd.
+    drawLane(P.chatIn, 1 - 0.75 * after);
+    drawLane(P.chatOut, 1 - reveal);
+    text('tekst in', (HUMAN.x + 70 + left(LLM)) / 2, 442, 1 - reveal);
+    text('tekst uit', (HUMAN.x + 70 + left(LLM)) / 2, 558, 1 - reveal);
+
+    // De loop bouwt zich op; als de agent klaar is, wordt hij rustig.
+    if (loop) {
+      const quiet = 1 - 0.5 * done;
+      drawLane(P.loopOut, quiet, clamp01(reveal * 2));
+      drawLane(P.loopBack, quiet, clamp01(reveal * 1.4 - 0.4));
+      drawLane(P.result, 1, done);
+      const cap = g => reveal * quiet * (0.5 + 0.5 * g);
+      text('1   Tekst lezen', LLM.x + 22, (LLM.y + LLM.h / 2 + LOOP_Y) / 2, cap(glow.cap1), 30, 'left');
+      text('2   Tekst schrijven', (right(LLM) + left(ACT)) / 2, LLM.y - 30, cap(glow.cap2), 30);
+      text('3   Actie uitvoeren', ACT.x, LABEL_Y, cap(glow.cap3), 30);
+      text('↻  herhaal', (LLM.x + ACT.x) / 2, LOOP_Y + 40, reveal * quiet * 0.7, 28);
+    }
+
+    // Tekstblokjes vóór de blokken, zodat ze erin verdwijnen.
+    if (!loop) drawChip(ping.chip, 1);
+    else {
+      drawChip(ping && ping.chip, loop.pingFade);
+      drawChip(loop.chip, 1);
+    }
+
+    drawHuman(1 - 0.55 * after * (1 - done), glow.human);
+    drawBox(LLM, 1, 1, glow.llm, C.glow, 'LLM');
+    drawLLMDots(glow.llm);
+    if (loop) {
+      drawBox(ACT, reveal * (1 - 0.4 * done), lerp(0.8, 1, reveal), glow.act, C.kind.world, '');
+      drawBolt(reveal * (1 - 0.4 * done), glow.act);
+    }
+
+    // Stap 4–5: de hele loop is de agent.
+    if (agent > 0.01) {
+      const a = smooth(agent);
+      ctx.save();
+      ctx.globalAlpha = a;
+      roundRect(FRAME.x, FRAME.y, FRAME.w, FRAME.h, 36);
+      ctx.setLineDash([16, 12]);
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = C.glow;
+      ctx.shadowColor = C.glow;
+      ctx.shadowBlur = 18 * S;
+      ctx.stroke();
+      ctx.restore();
+      text('Agent', FRAME.x, FRAME.y - 38, a, 50, 'left', 600, C.outText);
+    }
+  }
+
+  function layout() {
+    dpr = window.devicePixelRatio || 1;
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    S = Math.min(W / 1920, H / 1080);
+  }
+
+  function setStep(n) {
+    n = Math.max(1, Math.min(STEPS, n));
+    if (n === step) return;
+    step = n;
+    if (n <= 2 && loop) { resetPing(); for (let t = 0; t < 0.5; t += 1 / 60) updatePing(1 / 60); }
+    if (n >= 3 && !loop) startLoop();
+    if (loop) {
+      loop.finish = n === 5;
+      // Terug van 5 naar 4: de agent gaat weer verder met de loop.
+      if (n === 4 && (loop.phase === 'result' || loop.phase === 'idle')) { loop.phase = 'think'; loop.t = 0; loop.chip = null; }
+    }
+  }
+  window.scene = { setStep, next: () => setStep(step + 1), prev: () => setStep(step - 1), get step() { return step; } };
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    // Stap 2 bevriest de animatie; P pauzeert altijd.
+    if (!paused && step !== 2) update(dt);
+    agent = approach(agent, step >= 4 ? 1 : 0, dt, 0.9);
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  addEventListener('keydown', e => {
+    if (['ArrowRight', 'PageDown', 'ArrowDown'].includes(e.key)) window.scene.next();
+    else if (['ArrowLeft', 'PageUp', 'ArrowUp'].includes(e.key)) window.scene.prev();
+    else if (e.key === 'p' || e.key === 'P') paused = !paused;
+  });
+  addEventListener('click', () => window.scene.next());
+  addEventListener('resize', layout);
+  layout();
+  resetPing();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

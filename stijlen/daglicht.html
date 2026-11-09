@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daglicht</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link id="fonts" href="https://fonts.googleapis.com/css2?family=Geist:wght@300..800&family=Instrument+Sans:wght@400..700&display=swap" rel="stylesheet">
+<style>
+/*
+  Daglicht: de werkdefinitie voor de slides, met visualisatie 1 (stap 1 van
+  ../visualisaties/1-3-ai-model.html) live ingeladen. De visual zelf blijft ongewijzigd:
+  alleen zijn CSS-variabelen (kleuren en letter) worden overschreven.
+  Openen via de lokale server (.claude/launch.json → "slides"), anders kan de visual niet laden.
+  Klik op een slide = presentatiemodus: ←/→ slide, F volledig scherm, Esc terug.
+*/
+
+/* ---------- Overzichtspagina ---------- */
+:root {
+  --page-bg: #ececef;
+  --page-fg: #1d1d1f;
+  --page-muted: #6e6e73;
+  --page-card: #ffffff;
+  --page-line: #d9d9de;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--page-bg); color: var(--page-fg);
+  font: 16px/1.5 -apple-system, system-ui, "Geist", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.page { max-width: 1440px; margin: 0 auto; padding: 56px 32px 96px; }
+.page > header h1 { font-size: 40px; letter-spacing: -0.03em; margin: 0 0 8px; font-weight: 700; }
+.page > header p { margin: 0; color: var(--page-muted); max-width: 760px; }
+.keys { margin-top: 12px; font-size: 14px; color: var(--page-muted); }
+kbd {
+  font: 12px/1 ui-monospace, Menlo, monospace;
+  border: 1px solid var(--page-line); border-bottom-width: 2px;
+  background: var(--page-card); border-radius: 5px; padding: 3px 6px;
+}
+
+.rules {
+  margin-top: 36px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+}
+.rules > div { background: var(--page-card); border-radius: 12px; padding: 22px 26px; }
+.rules h3 { margin: 0 0 10px; font-size: 15px; }
+.rules ul { margin: 0; padding-left: 18px; color: #3a3a3c; font-size: 15px; }
+.rules li + li { margin-top: 4px; }
+@media (max-width: 860px) { .rules { grid-template-columns: 1fr; } }
+
+.variant { margin-top: 64px; }
+.variant-head {
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 24px;
+  margin-bottom: 18px; flex-wrap: wrap;
+}
+.variant-head .idx { font-size: 14px; color: var(--page-muted); font-weight: 600; }
+.variant-head h2 { margin: 2px 0 4px; font-size: 30px; letter-spacing: -0.025em; }
+.variant-head p { margin: 0; color: var(--page-muted); max-width: 680px; }
+.meta { display: flex; align-items: center; gap: 18px; }
+.swatches { display: flex; gap: 6px; }
+.swatches span { width: 28px; height: 28px; border-radius: 50%; border: 1px solid rgba(0,0,0,.12); }
+.btn {
+  appearance: none; border: 0; cursor: pointer;
+  background: var(--page-fg); color: #fff; font: 600 14px -apple-system, system-ui, sans-serif;
+  padding: 10px 16px; border-radius: 999px;
+}
+.btn:hover { opacity: .85; }
+
+.grid { display: grid; gap: 14px; grid-template-columns: 2fr 1fr 1fr; }
+.grid .frame:first-child { grid-row: span 2; }
+@media (max-width: 860px) {
+  .grid { grid-template-columns: 1fr 1fr; }
+  .grid .frame:first-child { grid-column: span 2; grid-row: auto; }
+}
+
+/* Een frame schaalt een 1920×1080-slide naar zijn breedte */
+.frame {
+  position: relative; aspect-ratio: 16 / 9; overflow: hidden;
+  border-radius: 12px; cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 8px 24px rgba(0,0,0,.08);
+}
+.frame > .slide { position: absolute; left: 0; top: 0; transform-origin: 0 0; transform: scale(var(--s, .2)); }
+
+/* ---------- Presentatiemodus ---------- */
+.presenter {
+  position: fixed; inset: 0; background: #000; z-index: 10;
+  display: none; align-items: center; justify-content: center;
+}
+.presenter.open { display: flex; }
+.presenter .frame { width: min(100vw, 177.78vh); border-radius: 0; box-shadow: none; cursor: default; }
+.hud {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+  background: rgba(30,30,32,.8); color: #f5f5f7; backdrop-filter: blur(12px);
+  font: 500 14px -apple-system, system-ui, sans-serif; padding: 8px 14px; border-radius: 999px;
+  transition: opacity .6s ease; pointer-events: none; white-space: nowrap;
+}
+.hud.hide { opacity: 0; }
+
+/* ---------- Slide-basis (1920×1080) ---------- */
+.slide {
+  width: 1920px; height: 1080px; position: relative; overflow: hidden;
+  background: var(--bg); color: var(--fg); font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+.slide .stage { position: absolute; inset: 0; pointer-events: none; }
+.slide .content {
+  position: absolute; inset: 0; padding: 150px 180px;
+  display: flex; flex-direction: column; justify-content: center;
+  align-items: var(--align, center); text-align: var(--text-align, center);
+}
+.slide h1, .slide h2, .statement, .number {
+  margin: 0; font-weight: var(--hw); letter-spacing: var(--track); line-height: 1;
+}
+.slide h1 { font-size: 210px; line-height: .98; }
+.slide h2 { font-size: 176px; }
+.slide em { font-style: normal; color: var(--accent); }
+.sub { margin: 52px 0 0; font-size: 46px; font-weight: 500; color: var(--muted); letter-spacing: -0.015em; }
+.statement { font-size: 132px; line-height: 1.06; max-width: 1560px; }
+.statement span { display: inline-block; }
+.number { font-size: 600px; line-height: .82; font-variant-numeric: tabular-nums; }
+.caption { margin: 56px 0 0; font-size: 58px; line-height: 1.2; color: var(--muted); font-weight: 500; letter-spacing: -0.02em; }
+.vis-frame { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; border: 0; pointer-events: none; background: transparent; }
+
+/* ---------- Beweging: elementen komen op in leesvolgorde ---------- */
+.slide [data-a] { opacity: 0; }
+.slide.play [data-a] {
+  animation: var(--anim) var(--dur, 1s) cubic-bezier(.22,.8,.2,1) both;
+  animation-delay: calc(var(--d, 0) * var(--stagger, .2s) + .15s);
+}
+.slide.play .statement [data-a] { --stagger: .11s; }
+
+@keyframes rise   { from { opacity: 0; transform: translateY(36px); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .slide.play [data-a] { animation-duration: .01s !important; }
+}
+
+/* =========================================================
+   DAGLICHT — licht blauwwit, donkerblauwe letter,
+   rustig en helder in een verlichte zaal
+   ========================================================= */
+.v-daglicht {
+  --bg: #f2f6fc; --fg: #0a1b3d; --muted: #5d6d8e; --accent: #1d5fe0;
+  --font: "Instrument Sans", -apple-system, system-ui, sans-serif;
+  --hw: 600; --track: -0.035em;
+  --align: flex-start; --text-align: left;
+  --anim: rise; --dur: 1s;
+}
+.v-daglicht .sub { order: -1; margin: 0 0 40px; }
+.v-daglicht .number { color: var(--accent); }
+.v-daglicht .caption b { color: var(--fg); font-weight: 600; }
+
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>Daglicht</h1>
+    <p>De werkdefinitie voor de slides. De grote tegel is visualisatie 1, live en ongewijzigd: alleen kleur en letter volgen de stijl.</p>
+    <div class="keys">Klik op een slide om te presenteren · <kbd>←</kbd> <kbd>→</kbd> slide · <kbd>F</kbd> volledig scherm · <kbd>Esc</kbd> terug</div>
+  </header>
+
+  <section class="rules">
+    <div>
+      <h3>Wat we doen (keynote)</h3>
+      <ul>
+        <li>Eén gedachte per slide. Jullie vertellen, de slide toont.</li>
+        <li>Grote, strakke kop; hooguit één klein grijs onderschrift.</li>
+        <li>Kleur alleen waar de aandacht moet zijn: één woord, één getal.</li>
+        <li>Lege ruimte is het ontwerp. Niets op de slide zonder functie.</li>
+        <li>Beweging volgt het verhaal: woorden komen op in leesvolgorde, het getal telt op.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Wat we vermijden (AI-slop)</h3>
+      <ul>
+        <li>Gloeiende blobs en paars-blauwe verlopen zonder functie.</li>
+        <li>Glaspanelen, kaartjes en kaders rond tekst.</li>
+        <li>Labels in gespatieerde hoofdletters, badges, decoratieve iconen.</li>
+        <li>Gekleurde streepjes en accentlijnen als opvulling.</li>
+        <li>Standaardletter en standaardkleuren uit gewoonte in plaats van keuze.</li>
+      </ul>
+    </div>
+  </section>
+
+  <main id="variants"></main>
+</div>
+
+<div class="presenter" id="presenter">
+  <div class="frame" id="pframe"></div>
+  <div class="hud hide" id="hud"></div>
+</div>
+
+<script>
+const SYS = '-apple-system, system-ui, Geist, sans-serif';
+const VARIANTS = [
+  { id: 'daglicht', name: 'Daglicht',
+    desc: 'Het Oceaan-blauw op licht. Blauwwitte achtergrond, donkerblauwe letter. Rustig en goed leesbaar als de zaal niet donker is. Letter: Instrument Sans.',
+    swatches: ['#f2f6fc', '#5d6d8e', '#1d5fe0', '#0a1b3d'],
+    vis: { 'bg': 'transparent', 'box-fill': '#ffffff', 'box-stroke': '#c8d5ea', 'box-glow': '#1d5fe0',
+           'label': '#5d6d8e', 'output-text': '#0a1b3d', 'noise': '#c3cfe3',
+           'cat-a': '#0b2a6e', 'cat-b': '#1d5fe0', 'cat-c': '#86b2ff', 'font': '"Instrument Sans", ' + SYS } },
+];
+
+// Woord voor woord, net als het taalmodel zelf.
+const words = (text, accent) => text.split(' ').map((w, i) =>
+  `<span data-a style="--d:${i}">${w.replace(/[.,]$/, '') === accent ? `<em>${accent}</em>${w.slice(accent.length)}` : w}</span>`).join(' ');
+
+const SLIDES = [
+  { cls: 's-open', html: `
+    <div class="content">
+      <h1 data-a style="--d:0">Kunstmatige<br><em>intelligentie</em></h1>
+      <p class="sub" data-a style="--d:1">Gemeenteavond · 10 november</p>
+    </div>` },
+  { cls: 's-chapter', html: `
+    <div class="content">
+      <p class="sub" data-a style="--d:0">Deel 1</p>
+      <h2 data-a style="--d:1">The state of AI</h2>
+    </div>` },
+  { cls: 's-statement', html: `
+    <div class="content">
+      <p class="statement">${words('Het voorspelt steeds het volgende woord.', 'woord')}</p>
+    </div>` },
+  { cls: 's-number', html: `
+    <div class="content">
+      <div class="num-wrap">
+        <div class="number" data-a style="--d:0" data-count="60">60</div>
+        <p class="caption" data-a style="--d:2">computers tegelijk,<br><b>aangestuurd door één agent.</b></p>
+      </div>
+    </div>` },
+  { cls: 's-visual', html: `<iframe class="vis-frame" tabindex="-1" title="Visualisatie 1"></iframe>` },
+];
+const GRID_ORDER = [4, 0, 1, 2, 3]; // grote tegel = visualisatie 1
+
+// Visualisatie 1 ophalen; per variant alleen zijn CSS-variabelen overschrijven.
+let visSource = null;
+const visReady = fetch('../visualisaties/1-3-ai-model.html').then(r => r.text()).then(t => { visSource = t; });
+function visDoc(v) {
+  const vars = Object.entries(v.vis).map(([k, val]) => `--${k}: ${val};`).join(' ');
+  const fonts = document.getElementById('fonts').outerHTML;
+  const inject = `${fonts}<style>:root { ${vars} }</style>` +
+    `<script>document.fonts.load('500 40px Geist'); document.fonts.load('500 40px "Instrument Sans"');<\/script>`;
+  return visSource.replace('</head>', inject + '</head>');
+}
+
+function makeSlide(v, i) {
+  const el = document.createElement('div');
+  el.className = `slide v-${v.id} ${SLIDES[i].cls}`;
+  el.innerHTML = `<div class="stage"></div>${SLIDES[i].html}`;
+  const f = el.querySelector('iframe');
+  if (f) visReady.then(() => { f.srcdoc = visDoc(v); });
+  return el;
+}
+
+function play(slide) {
+  slide.classList.remove('play');
+  void slide.offsetWidth;
+  slide.classList.add('play');
+  const n = slide.querySelector('[data-count]');
+  if (n) {
+    const target = +n.dataset.count, dur = 1500;
+    n.textContent = '0';
+    setTimeout(() => {
+      const t0 = performance.now();
+      const tick = t => {
+        const p = Math.min(1, (t - t0) / dur);
+        n.textContent = Math.round((1 - Math.pow(1 - p, 3)) * target);
+        if (p < 1) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    }, 200);
+  }
+}
+
+const ro = new ResizeObserver(entries => {
+  for (const e of entries) e.target.style.setProperty('--s', e.contentRect.width / 1920);
+});
+const io = new IntersectionObserver(entries => {
+  for (const e of entries) if (e.isIntersecting) { play(e.target.firstElementChild); io.unobserve(e.target); }
+}, { threshold: .5 });
+
+const root = document.getElementById('variants');
+VARIANTS.forEach((v, vi) => {
+  const sec = document.createElement('section');
+  sec.className = 'variant';
+  sec.innerHTML = `
+    <div class="variant-head">
+      <div>
+        <div class="idx">Werkdefinitie</div>
+        <h2>${v.name}</h2>
+        <p>${v.desc}</p>
+      </div>
+      <div class="meta">
+        <div class="swatches">${v.swatches.map(c => `<span style="background:${c}"></span>`).join('')}</div>
+        <button class="btn">Presenteer ▶</button>
+      </div>
+    </div>
+    <div class="grid"></div>`;
+  const grid = sec.querySelector('.grid');
+  GRID_ORDER.forEach(si => {
+    const f = document.createElement('div');
+    f.className = 'frame';
+    const sl = makeSlide(v, si);
+    f.appendChild(sl);
+    f.addEventListener('mouseenter', () => play(sl));
+    f.addEventListener('click', () => openPresenter(vi, si));
+    grid.appendChild(f);
+    ro.observe(f);
+    io.observe(f);
+  });
+  sec.querySelector('.btn').addEventListener('click', () => openPresenter(vi, 0));
+  root.appendChild(sec);
+});
+
+// Presentatiemodus
+const presenter = document.getElementById('presenter');
+const pframe = document.getElementById('pframe');
+const hud = document.getElementById('hud');
+let cur = { v: 0, s: 0 }, hudTimer;
+ro.observe(pframe);
+
+function show() {
+  pframe.innerHTML = '';
+  const sl = makeSlide(VARIANTS[cur.v], cur.s);
+  pframe.appendChild(sl);
+  requestAnimationFrame(() => play(sl));
+  hud.textContent = `${VARIANTS[cur.v].name} — slide ${cur.s + 1}/${SLIDES.length}`;
+  hud.classList.remove('hide');
+  clearTimeout(hudTimer);
+  hudTimer = setTimeout(() => hud.classList.add('hide'), 1600);
+}
+function openPresenter(v, s) { cur = { v, s }; presenter.classList.add('open'); show(); }
+function closePresenter() {
+  presenter.classList.remove('open');
+  pframe.innerHTML = '';
+  if (document.fullscreenElement) document.exitFullscreen();
+}
+
+presenter.addEventListener('click', () => { cur.s = (cur.s + 1) % SLIDES.length; show(); });
+document.addEventListener('keydown', e => {
+  if (!presenter.classList.contains('open')) return;
+  const k = e.key;
+  if (k === 'Escape') return closePresenter();
+  if (k === 'ArrowRight' || k === 'PageDown' || k === ' ') cur.s = Math.min(SLIDES.length - 1, cur.s + 1);
+  else if (k === 'ArrowLeft' || k === 'PageUp') cur.s = Math.max(0, cur.s - 1);
+  else if (k === 'f' || k === 'F') { document.fullscreenElement ? document.exitFullscreen() : presenter.requestFullscreen(); return; }
+  else return;
+  e.preventDefault();
+  show();
+});
+</script>
+</body>
+</html>

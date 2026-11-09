@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visualisatie 5 – Computer use</title>
+<style>
+  /* Zelfde stijlvariabelen als visualisatie 1–4, zodat ze later samen te stylen zijn. */
+  :root {
+    --bg: #0f1115;
+    --box-fill: #171a21;
+    --screen: #0b0d11;
+    --window: #1d2129;
+    --box-stroke: #3a4150;
+    --box-glow: #8fb4ff;
+    --label: #c9ced8;
+    --output-text: #eef1f6;
+    --app-code: #8fb4ff;
+    --app-sheet: #5fd39a;
+    --app-doc: #ffb454;
+    --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, Menlo, monospace;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<script>
+/*
+  Stappen (pijl rechts / PageDown / klik = volgende, pijl links / PageUp = vorige, P = pauze):
+    1. De agent schrijft tekstcommando's; de computer voert ze uit (code, spreadsheet, document)
+    2. Uitzoomen: tientallen computers die tegelijk worden bediend
+  Van buitenaf: window.scene.setStep(n).
+*/
+(() => {
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d');
+  const css = getComputedStyle(document.documentElement);
+  const v = name => css.getPropertyValue(name).trim();
+  const C = {
+    boxFill: v('--box-fill'), screen: v('--screen'), window: v('--window'), boxStroke: v('--box-stroke'),
+    glow: v('--box-glow'), label: v('--label'), outText: v('--output-text'),
+    font: v('--font'), mono: v('--mono'),
+    app: { code: v('--app-code'), sheet: v('--app-sheet'), doc: v('--app-doc') },
+  };
+  const STEPS = 2;
+
+  // ---- Indeling in het 1920×1080-ontwerpvlak ----
+  const AGENT = { x: 80, y: 400, w: 300, h: 280 };
+  const PANEL = { x: 470, y: 260, w: 480, h: 560 };
+  const MON = { x: 1040, y: 260, w: 800, h: 500, bezel: 18 };
+  const MON_CENTER = [MON.x + MON.w / 2, MON.y + MON.h / 2 + 38];
+  const GRID = { dx: 940, dy: 700, i: 4, j: 3 }; // stap 2: raster van computers
+  const ZOOM_OUT = 0.28;
+
+  // Vensters in schermcoördinaten (0..1). Elke app heeft een vaste plek en kleur.
+  const APPS = {
+    code: { x: 0.05, y: 0.06, w: 0.56, h: 0.72, icon: 0 },
+    sheet: { x: 0.33, y: 0.1, w: 0.6, h: 0.72, icon: 1 },
+    doc: { x: 0.17, y: 0.16, w: 0.52, h: 0.72, icon: 2 },
+  };
+  const CODE_LINES = [[0, 0.5], [1, 0.62], [1, 0.4], [2, 0.55], [2, 0.35], [1, 0.3], [1, 0.58], [2, 0.45], [1, 0.2], [0, 0.1], [0, 0.42]];
+  const DOC_LINES = [0.45, 0.92, 0.96, 0.88, 0.6, 0.94, 0.9, 0.72];
+  const SHEET = { cols: 5, rows: 8 };
+
+  // ---- Het script van de hoofdcomputer: wat de agent schrijft en wat er dan gebeurt ----
+  const SCRIPT = [
+    { verb: 'open', arg: 'code-editor', act: { type: 'open', app: 'code' } },
+    { verb: 'typ', arg: 'functie totaal()', act: { type: 'type', app: 'code', n: 6 } },
+    { verb: 'typ', arg: 'return som', act: { type: 'type', app: 'code', n: 5 } },
+    { verb: 'opslaan', arg: '', act: { type: 'save', app: 'code' } },
+    { verb: 'open', arg: 'spreadsheet', act: { type: 'open', app: 'sheet' } },
+    { verb: 'klik', arg: 'cel B2', act: { type: 'click', app: 'sheet', cell: [1, 1] } },
+    { verb: 'vul', arg: 'B2 t/m B7', act: { type: 'fill', app: 'sheet', col: 1, from: 1, to: 6 } },
+    { verb: 'vul', arg: 'C2 t/m C7', act: { type: 'fill', app: 'sheet', col: 2, from: 1, to: 6 } },
+    { verb: 'open', arg: 'document', act: { type: 'open', app: 'doc' } },
+    { verb: 'typ', arg: '"Beste allemaal, …"', act: { type: 'type', app: 'doc', n: 4 } },
+    { verb: 'typ', arg: '"Groeten, …"', act: { type: 'type', app: 'doc', n: 4 } },
+    { verb: 'opslaan', arg: '', act: { type: 'save', app: 'doc' } },
+  ];
+
+  let W, H, S, dpr, time = 0, step = 1, paused = false, zoom = 0;
+  let main, minis = [], panel = { lines: [], exec: -1 }, agentGlow = 0;
+
+  const smooth = t => t * t * (3 - 2 * t);
+  const clamp01 = t => Math.max(0, Math.min(1, t));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const approach = (x, target, dt, dur) => x + Math.sign(target - x) * Math.min(Math.abs(target - x), dt / dur);
+
+  // ---- Een computer: vensters, muis en een script dat stap voor stap wordt uitgevoerd ----
+  function makeComputer(script, opts = {}) {
+    return {
+      script, idx: 0, phase: 'write', t: 0, speed: opts.speed || 1, onPanel: !!opts.onPanel,
+      windows: [], cursor: { x: 0.5, y: 0.5, fx: 0.5, fy: 0.5, tx: 0.5, ty: 0.5 }, ripple: 0, hold: 0,
+    };
+  }
+  function randomScript() {
+    const apps = ['code', 'sheet', 'doc'].sort(() => Math.random() - 0.5);
+    const out = [];
+    for (const app of apps) {
+      out.push({ act: { type: 'open', app } });
+      if (app === 'sheet') {
+        out.push({ act: { type: 'fill', app, col: 1, from: 1, to: 6 } });
+        out.push({ act: { type: 'fill', app, col: 3, from: 1, to: 6 } });
+      } else out.push({ act: { type: 'type', app, n: app === 'code' ? 11 : 8 } });
+      if (Math.random() < 0.6) out.push({ act: { type: 'save', app } });
+    }
+    return out;
+  }
+
+  const win = (c, app) => c.windows.find(w => w.app === app);
+  const cellPos = (app, col, row) => {
+    const a = APPS[app], top = a.y + a.h * 0.12, ch = (a.h * 0.86) / SHEET.rows, cw = a.w / SHEET.cols;
+    return [a.x + (col + 0.5) * cw, top + (row + 0.5) * ch];
+  };
+  // Waar de muis naartoe gaat voor een actie.
+  function target(c, act) {
+    const a = APPS[act.app];
+    if (act.type === 'open') return [0.4 + 0.1 * a.icon, 0.955];
+    if (act.type === 'save') return [a.x + a.w - 0.04, a.y + 0.035];
+    if (act.type === 'click') return cellPos(act.app, ...act.cell);
+    if (act.type === 'fill') return cellPos(act.app, act.col, act.from);
+    const w = win(c, act.app), line = w ? Math.floor(w.lines) : 0;
+    return [a.x + 0.2, a.y + 0.14 + Math.min(line, 9) * 0.055];
+  }
+  function actDuration(act) {
+    if (act.type === 'open') return 0.55;
+    if (act.type === 'type') return 0.22 * act.n;
+    if (act.type === 'fill') return 0.2 * (act.to - act.from + 1);
+    return 0.4;
+  }
+
+  function updateComputer(c, dt) {
+    dt *= c.speed;
+    c.ripple = Math.max(0, c.ripple - dt * 2.5);
+    for (const w of c.windows) { w.open = Math.min(1, w.open + dt / 0.35); w.saved = Math.max(0, w.saved - dt * 0.8); }
+    if (c.phase === 'hold') {
+      c.hold -= dt;
+      for (const w of c.windows) if (c.hold < 0.6) w.close = Math.min(1, (w.close || 0) + dt / 0.5);
+      if (c.hold <= 0) { c.windows = []; c.idx = 0; c.phase = 'write'; c.t = 0; if (!c.onPanel) c.script = randomScript(); }
+      return;
+    }
+    const cmd = c.script[c.idx], act = cmd.act;
+    c.t += dt;
+    if (c.phase === 'write') {
+      // De agent schrijft het commando (alleen zichtbaar bij de hoofdcomputer).
+      const dur = c.onPanel ? Math.max(0.45, (cmd.verb.length + cmd.arg.length + 2) / 34) : 0.35;
+      if (c.onPanel) {
+        if (!c.written) { panel.lines.push({ verb: cmd.verb, arg: cmd.arg, typed: 0 }); c.written = true; }
+        panel.lines[panel.lines.length - 1].typed = clamp01(c.t / dur);
+        agentGlow = 1;
+      }
+      if (c.t >= dur) {
+        c.phase = 'move'; c.t = 0;
+        Object.assign(c.cursor, { fx: c.cursor.x, fy: c.cursor.y });
+        [c.cursor.tx, c.cursor.ty] = target(c, act);
+        if (c.onPanel) panel.exec = panel.lines.length - 1;
+      }
+    } else if (c.phase === 'move') {
+      const e = smooth(clamp01(c.t / 0.55));
+      c.cursor.x = lerp(c.cursor.fx, c.cursor.tx, e);
+      c.cursor.y = lerp(c.cursor.fy, c.cursor.ty, e);
+      if (c.t >= 0.55) {
+        c.phase = 'do'; c.t = 0; c.ripple = 1;
+        if (act.type === 'open') {
+          c.windows = c.windows.filter(w => w.app !== act.app);
+          c.windows.push({ app: act.app, open: 0, lines: 0, cells: {}, sel: null, saved: 0 });
+        }
+        const w = win(c, act.app);
+        if (act.type === 'click' && w) w.sel = act.cell;
+        if (act.type === 'save' && w) w.saved = 1;
+        if (act.type === 'type' && w) w.base = w.lines;
+      }
+    } else {
+      const dur = actDuration(act), p = clamp01(c.t / dur), w = win(c, act.app);
+      if (w && act.type === 'type') {
+        w.lines = Math.min(w.base + act.n * p, act.app === 'code' ? CODE_LINES.length : DOC_LINES.length);
+        const [tx, ty] = target(c, act); c.cursor.x = lerp(c.cursor.x, tx + 0.15, 0.1); c.cursor.y = lerp(c.cursor.y, ty, 0.1);
+      }
+      if (w && act.type === 'fill') {
+        const n = act.to - act.from + 1, k = Math.min(n - 1, Math.floor(p * n));
+        for (let r = act.from; r <= act.from + k; r++) w.cells[act.col + ',' + r] = true;
+        w.sel = [act.col, act.from + k];
+        [c.cursor.x, c.cursor.y] = cellPos(act.app, act.col, act.from + k);
+      }
+      if (c.t >= dur + 0.25) {
+        c.idx++; c.phase = 'write'; c.t = 0; c.written = false;
+        if (c.onPanel) panel.exec = -1;
+        if (c.idx >= c.script.length) { c.phase = 'hold'; c.hold = 2.2; }
+      }
+    }
+  }
+
+  // ---- Tekenen ----
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+  function bar(x, y, w, h, color, alpha = 1) {
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
+    roundRect(x, y, Math.max(h, w), h, h / 2);
+    ctx.fill();
+  }
+  function text(str, x, y, alpha, size = 28, align = 'center', weight = 500, color = C.label, font = C.font) {
+    if (alpha <= 0.01) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
+    ctx.font = `${weight} ${size}px ${font}`;
+    ctx.textAlign = align; ctx.textBaseline = 'middle';
+    ctx.fillText(str, x, y);
+    ctx.restore();
+  }
+  function drawLane(x0, y, x1, alpha) {
+    if (alpha <= 0.01) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = C.boxStroke; ctx.fillStyle = C.boxStroke; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x1 + 2, y); ctx.lineTo(x1 - 14, y - 9); ctx.lineTo(x1 - 14, y + 9); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawWindow(w, sx, sy, sw, sh, detail) {
+    const a = APPS[w.app], color = C.app[w.app];
+    const e = smooth(w.open) * (1 - smooth(w.close || 0));
+    if (e <= 0.01) return;
+    const ww = a.w * sw, wh = a.h * sh;
+    const cx = sx + (a.x + a.w / 2) * sw, cy = sy + (a.y + a.h / 2) * sh;
+    const k = lerp(0.85, 1, e);
+    ctx.save();
+    ctx.translate(cx, cy); ctx.scale(k, k); ctx.translate(-ww / 2, -wh / 2);
+    ctx.globalAlpha = e;
+    roundRect(0, 0, ww, wh, 10);
+    ctx.fillStyle = C.window; ctx.fill();
+    ctx.strokeStyle = C.boxStroke; ctx.lineWidth = 2; ctx.stroke();
+    // Titelbalk met app-kleur; bij 'opslaan' licht hij even op.
+    const tb = wh * 0.1;
+    ctx.save(); roundRect(0, 0, ww, wh, 10); ctx.clip();
+    ctx.fillStyle = color; ctx.globalAlpha = e * (0.25 + 0.6 * w.saved);
+    ctx.fillRect(0, 0, ww, tb);
+    ctx.restore();
+    ctx.globalAlpha = e;
+    for (let d = 0; d < 3; d++) { ctx.fillStyle = C.boxStroke; ctx.beginPath(); ctx.arc(16 + d * 18, tb / 2, 5, 0, Math.PI * 2); ctx.fill(); }
+    if (w.saved > 0.05) text('✓', ww - 26, tb / 2, e * w.saved, 26, 'center', 700, color);
+    if (!detail) { ctx.restore(); return; }
+
+    const lh = (wh - tb) / 12, pad = 26;
+    if (w.app === 'code') {
+      CODE_LINES.forEach(([ind, len], i) => {
+        const f = clamp01(w.lines - i);
+        if (f <= 0) return;
+        const y = tb + lh * (i + 0.8), x = pad + ind * 34, full = len * (ww - 2 * pad - ind * 34);
+        bar(x, y, Math.min(full * 0.35, full * f), 10, color, e);
+        if (f * full > full * 0.38) bar(x + full * 0.38, y, (f * full - full * 0.38), 10, C.label, e * 0.6);
+      });
+    } else if (w.app === 'doc') {
+      DOC_LINES.forEach((len, i) => {
+        const f = clamp01(w.lines - i);
+        if (f <= 0) return;
+        const y = tb + lh * (i * 1.15 + 0.9);
+        bar(pad, y, (ww - 2 * pad) * len * f, i === 0 ? 16 : 10, i === 0 ? color : C.label, e * (i === 0 ? 1 : 0.6));
+      });
+    } else {
+      const top = wh * 0.12, ch = (wh * 0.86) / SHEET.rows, cw = ww / SHEET.cols;
+      ctx.globalAlpha = e * 0.6;
+      ctx.strokeStyle = C.boxStroke; ctx.lineWidth = 1.5;
+      for (let r = 0; r <= SHEET.rows; r++) { ctx.beginPath(); ctx.moveTo(0, top + r * ch); ctx.lineTo(ww, top + r * ch); ctx.stroke(); }
+      for (let q = 1; q < SHEET.cols; q++) { ctx.beginPath(); ctx.moveTo(q * cw, top); ctx.lineTo(q * cw, top + SHEET.rows * ch); ctx.stroke(); }
+      for (let q = 1; q < SHEET.cols; q++) bar(q * cw + 14, top + ch / 2 - 5, cw * 0.4, 10, C.label, e * 0.35);
+      for (const key in w.cells) {
+        const [q, r] = key.split(',').map(Number);
+        bar(q * cw + 14, top + r * ch + ch / 2 - 5, cw * (0.45 + 0.3 * ((q * 7 + r * 3) % 5) / 5), 10, color, e);
+      }
+      if (w.sel) {
+        ctx.globalAlpha = e;
+        ctx.strokeStyle = color; ctx.lineWidth = 3;
+        ctx.strokeRect(w.sel[0] * cw + 2, top + w.sel[1] * ch + 2, cw - 4, ch - 4);
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawCursor(x, y, ripple) {
+    ctx.save();
+    if (ripple > 0) {
+      ctx.globalAlpha = ripple * 0.8;
+      ctx.strokeStyle = C.outText; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(x, y, 8 + 26 * (1 - ripple), 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.translate(x, y);
+    ctx.beginPath();
+    ctx.moveTo(0, 0); ctx.lineTo(0, 30); ctx.lineTo(8, 23); ctx.lineTo(14, 36); ctx.lineTo(20, 33); ctx.lineTo(14, 21); ctx.lineTo(24, 21);
+    ctx.closePath();
+    ctx.fillStyle = C.outText; ctx.fill();
+    ctx.strokeStyle = C.screen; ctx.lineWidth = 2.5; ctx.stroke();
+    ctx.restore();
+  }
+
+  // Monitor met scherm, taakbalk, vensters en muis. 'detail' = ook de inhoud van vensters.
+  function drawComputer(c, mx, my, alpha, detail = true) {
+    if (alpha <= 0.01) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    // Voet
+    ctx.fillStyle = C.boxStroke;
+    ctx.fillRect(mx + MON.w / 2 - 30, my + MON.h, 60, 56);
+    roundRect(mx + MON.w / 2 - 110, my + MON.h + 52, 220, 18, 9); ctx.fill();
+    // Behuizing
+    roundRect(mx, my, MON.w, MON.h, 22);
+    ctx.fillStyle = C.boxFill; ctx.fill();
+    ctx.strokeStyle = C.boxStroke; ctx.lineWidth = 2; ctx.stroke();
+    const sx = mx + MON.bezel, sy = my + MON.bezel, sw = MON.w - 2 * MON.bezel, sh = MON.h - 2 * MON.bezel;
+    roundRect(sx, sy, sw, sh, 8);
+    ctx.fillStyle = C.screen; ctx.fill();
+    ctx.save(); ctx.clip();
+    // Taakbalk met drie apps
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = C.boxFill;
+    ctx.fillRect(sx, sy + sh * 0.91, sw, sh * 0.09);
+    ['code', 'sheet', 'doc'].forEach((app, i) => {
+      const open = !!win(c, app);
+      ctx.globalAlpha = alpha * (open ? 1 : 0.55);
+      ctx.fillStyle = C.app[app];
+      roundRect(sx + sw * (0.4 + 0.1 * i) - 14, sy + sh * 0.955 - 14, 28, 28, 7); ctx.fill();
+    });
+    for (const w of c.windows) { ctx.globalAlpha = alpha; drawWindow(w, sx, sy, sw, sh, detail); }
+    ctx.globalAlpha = alpha;
+    drawCursor(sx + c.cursor.x * sw, sy + c.cursor.y * sh, c.ripple);
+    ctx.restore();
+    ctx.restore();
+  }
+
+  function drawAgent(alpha) {
+    if (alpha <= 0.01) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    roundRect(AGENT.x, AGENT.y, AGENT.w, AGENT.h, 30);
+    ctx.setLineDash([16, 12]); ctx.lineWidth = 3;
+    ctx.strokeStyle = C.glow; ctx.shadowColor = C.glow; ctx.shadowBlur = 18 * S;
+    ctx.stroke();
+    ctx.restore();
+    text('Agent', AGENT.x, AGENT.y - 38, alpha, 50, 'left', 600, C.outText);
+    // Binnenin: het LLM met stipjes, die oplichten terwijl de agent een commando schrijft.
+    const b = 170, bx = AGENT.x + (AGENT.w - b) / 2, by = AGENT.y + (AGENT.h - b) / 2;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    roundRect(bx, by, b, b, 18);
+    ctx.fillStyle = C.boxFill; ctx.shadowColor = C.glow; ctx.shadowBlur = (12 + 30 * agentGlow) * S; ctx.fill();
+    ctx.shadowBlur = 0; ctx.strokeStyle = C.boxStroke; ctx.lineWidth = 2; ctx.stroke();
+    ctx.restore();
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+      const a = agentGlow * (0.5 + 0.5 * Math.sin(time * 9 + i * 1.7 + j * 2.9));
+      ctx.save();
+      ctx.globalAlpha = alpha * (0.15 + 0.8 * a);
+      ctx.fillStyle = a > 0.05 ? C.glow : C.boxStroke;
+      ctx.beginPath(); ctx.arc(bx + 35 + i * 33, by + 35 + j * 33, 4 + 2 * a, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // Het paneel met tekstcommando's: wat de agent schrijft, regel voor regel.
+  function drawPanel(alpha) {
+    if (alpha <= 0.01) return;
+    text('Tekst-commando’s', PANEL.x, PANEL.y - 38, alpha, 30, 'left');
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    roundRect(PANEL.x, PANEL.y, PANEL.w, PANEL.h, 18);
+    ctx.fillStyle = C.screen; ctx.fill();
+    ctx.strokeStyle = C.boxStroke; ctx.lineWidth = 2; ctx.stroke();
+    ctx.clip();
+    const lh = 46, maxLines = Math.floor((PANEL.h - 40) / lh);
+    const lines = panel.lines.slice(-maxLines), off = panel.lines.length - lines.length;
+    ctx.font = `500 26px ${C.mono}`;
+    ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+    lines.forEach((ln, i) => {
+      const y = PANEL.y + 40 + i * lh, x = PANEL.x + 34;
+      const isExec = off + i === panel.exec, isLast = off + i === panel.lines.length - 1;
+      const full = ln.verb + (ln.arg ? '  ' + ln.arg : '');
+      const shown = full.slice(0, Math.round(full.length * ln.typed));
+      const age = panel.lines.length - 1 - (off + i);
+      ctx.globalAlpha = alpha * Math.max(0.35, 1 - age * 0.12);
+      if (isExec) { ctx.fillStyle = C.glow; ctx.fillRect(PANEL.x + 14, y - 16, 5, 32); }
+      const vShown = shown.slice(0, ln.verb.length);
+      ctx.fillStyle = C.glow;
+      ctx.fillText(vShown, x, y);
+      if (shown.length > ln.verb.length) {
+        ctx.fillStyle = C.outText;
+        ctx.fillText(shown.slice(ln.verb.length), x + ctx.measureText(vShown).width, y);
+      }
+      if (isLast && ln.typed < 1 && Math.sin(time * 10) > -0.2) {
+        ctx.fillStyle = C.glow;
+        ctx.fillRect(x + ctx.measureText(shown).width + 4, y - 14, 3, 28);
+      }
+    });
+    ctx.restore();
+  }
+
+  function draw() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    // Camera: stap 2 zoomt uit rond de hoofdcomputer.
+    const zp = smooth(zoom), z = Math.pow(ZOOM_OUT, zp);
+    const [cx, cy] = [lerp(960, MON_CENTER[0], zp), lerp(540, MON_CENTER[1], zp)];
+    ctx.setTransform(dpr * S * z, 0, 0, dpr * S * z,
+      dpr * ((W - 1920 * S) / 2 + (960 - cx * z) * S), dpr * ((H - 1080 * S) / 2 + (540 - cy * z) * S));
+
+    const ui = 1 - smooth(clamp01(zoom / 0.4));        // agent + paneel verdwijnen
+    const many = smooth(clamp01((zoom - 0.2) / 0.6));  // de andere computers verschijnen
+    if (many > 0.01) {
+      const halfW = 960 / z + MON.w, halfH = 540 / z + MON.h;
+      for (const m of minis) {
+        const mx = MON.x + m.i * GRID.dx, my = MON.y + m.j * GRID.dy;
+        if (Math.abs(mx + MON.w / 2 - cx) > halfW || Math.abs(my + MON.h / 2 - cy) > halfH) continue;
+        drawComputer(m.c, mx, my, many * m.alpha, true);
+      }
+    }
+    drawAgent(ui);
+    drawLane(AGENT.x + AGENT.w, AGENT.y + AGENT.h / 2, PANEL.x, ui);
+    drawLane(PANEL.x + PANEL.w, AGENT.y + AGENT.h / 2, MON.x, ui);
+    drawPanel(ui);
+    drawComputer(main, MON.x, MON.y, 1, true);
+  }
+
+  function update(dt) {
+    time += dt;
+    agentGlow = Math.max(0, agentGlow - dt * 2.5);
+    updateComputer(main, dt);
+    if (zoom > 0.15) for (const m of minis) updateComputer(m.c, dt);
+  }
+
+  function layout() {
+    dpr = window.devicePixelRatio || 1;
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    S = Math.min(W / 1920, H / 1080);
+  }
+
+  function init() {
+    main = makeComputer(SCRIPT, { onPanel: true });
+    minis = [];
+    for (let i = -GRID.i; i <= GRID.i; i++) for (let j = -GRID.j; j <= GRID.j; j++) {
+      if (!i && !j) continue;
+      const c = makeComputer(randomScript(), { speed: rand(0.8, 1.4) });
+      for (let t = 0, end = rand(0, 14); t < end; t += 1 / 30) updateComputer(c, 1 / 30); // elk op een ander moment
+      minis.push({ i, j, c, alpha: rand(0.75, 1) });
+    }
+  }
+
+  function setStep(n) { step = Math.max(1, Math.min(STEPS, n)); }
+  window.scene = { setStep, next: () => setStep(step + 1), prev: () => setStep(step - 1), get step() { return step; } };
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    if (!paused) { update(dt); zoom = approach(zoom, step === 2 ? 1 : 0, dt, 2.6); }
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  addEventListener('keydown', e => {
+    if (['ArrowRight', 'PageDown', 'ArrowDown'].includes(e.key)) window.scene.next();
+    else if (['ArrowLeft', 'PageUp', 'ArrowUp'].includes(e.key)) window.scene.prev();
+    else if (e.key === 'p' || e.key === 'P') paused = !paused;
+  });
+  addEventListener('click', () => window.scene.next());
+  addEventListener('resize', layout);
+  layout();
+  init();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

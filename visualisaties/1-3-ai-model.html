@@ -1,0 +1,692 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visualisatie 1–3 – AI-model</title>
+<style>
+  /* Alle stijlkeuzes staan hier, zodat we ze later in de slides kunnen overschrijven. */
+  :root {
+    --bg: #0f1115;
+    --box-fill: #171a21;
+    --box-stroke: #3a4150;
+    --box-glow: #8fb4ff;
+    --label: #c9ced8;
+    --output-text: #eef1f6;
+    --noise: #5b6270;
+    --cat-a: #6ea8ff;
+    --cat-b: #ffb454;
+    --cat-c: #5fd39a;
+    --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, Menlo, monospace;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<script>
+/*
+  Stappen (pijl rechts / PageDown / klik = volgende, pijl links / PageUp = vorige, P = pauze):
+    1. Visualisatie 1 – abstracte data → AI-model → geordende output
+    2. Visualisatie 2 – tekst van het internet → LLM → zin die woord voor woord groeit
+    3. Visualisatie 3 – inzoomen op het LLM: neuraal netwerk, elke golf levert een woord op
+    4. Black box – uitzoomen: het netwerk blijkt een piepklein stukje van iets gigantisch
+    5. Terug uitzoomen naar visualisatie 2
+  Starten bij een stap kan met #1 t/m #5 in de URL. Van buitenaf: window.scene.setStep(n).
+*/
+(() => {
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d');
+  const css = getComputedStyle(document.documentElement);
+  const v = name => css.getPropertyValue(name).trim();
+  const C = {
+    bg: v('--bg'), boxFill: v('--box-fill'), boxStroke: v('--box-stroke'), glow: v('--box-glow'),
+    label: v('--label'), outText: v('--output-text'), noise: v('--noise'),
+    font: v('--font'), mono: v('--mono'),
+    cats: [v('--cat-a'), v('--cat-b'), v('--cat-c')],
+  };
+
+  // Stap 1 – uitvoer is geordend: elke rij heeft één vaste vorm en kleur.
+  const LANES = [
+    { shape: 'circle', color: C.cats[0] },
+    { shape: 'square', color: C.cats[1] },
+    { shape: 'triangle', color: C.cats[2] },
+  ];
+  // Stap 1 – invoer is rommelig: alle vormen, kleuren en wat ruis door elkaar.
+  const IN_SHAPES = ['circle', 'square', 'triangle', 'ring', 'dot', '0', '1'];
+
+  // Stap 2 – tekst uit alle hoeken van het internet.
+  const FRAGMENTS = [
+    'de kat zat op de mat', 'recept: 200 g bloem', 'Artikel 5.1', 'lol 😂', 'In den beginne',
+    'weerbericht: zonnig', 'Kabinet valt', 'hoe ontkalk ik', 'Amsterdam', 'beste pizza in Utrecht?',
+    'Hoofdstuk 3', 'te koop: fiets', 'Wikipedia', 'Psalm 23', 'Ajax wint met 2-1',
+    'gratis verzending', 'bedankt voor je bericht', 'ik ben het er niet mee eens', 'de', 'het',
+    'en', 'omdat', 'waarom?', 'Er was eens', 'Lees verder', 'klik hier', 'kortom',
+    'Met vriendelijke groet', 'review: ★★★★☆', 'Hoe laat is het?', 'sorry voor de late reactie',
+    'stap 1: verwarm de oven', 'fotosynthese', 'De Nachtwacht', '1 Korintiërs 13', 'Feyenoord',
+    'aanbieding', 'huiswerk wiskunde', 'zoekresultaten', 'nieuws', 'Lieve mama',
+    'bijsluiter', 'algemene voorwaarden', 'liefde', 'tot morgen!', 'Breaking:', 'the',
+    'is', 'Q3-cijfers', 'de Tweede Kamer', 'symptomen griep', 'reageer', 'ondertitels',
+  ];
+  const CODE_FRAGMENTS = [
+    'def main():', '<div>', 'return x', 'SELECT *', 'if (a > b)', '{ }', 'import numpy', '</p>',
+  ];
+  // Stap 2 – de zin die het model 'voorspelt'. Wordt in een loop afgewisseld.
+  const SENTENCES = [
+    'Een taalmodel voorspelt steeds het meest waarschijnlijke volgende woord.',
+    'Goedenavond allemaal, wat fijn dat jullie er zijn.',
+    'De hoofdstad van Nederland is Amsterdam.',
+  ];
+
+  const INPUT_PER_SEC = [75, 34]; // [stap 1, stap 2]: veel erin...
+  const OUTPUT_EVERY = 1.6;       // ...weinig eruit (stap 1: één kolom van 3 per interval)
+  const WORD_EVERY = 0.42;        // stap 2: één woord per interval
+
+  // Stap 3–4 – het neurale netwerk.
+  const NET = {
+    counts: [6, 9, 9, 9, 9, 6], // neuronen per laag; laatste laag = mogelijke woorden
+    zoom: 6,                    // zoomfactor van de camera bij stap 3
+    blackBoxZoom: 0.22,         // hoe ver we uitzoomen bij stap 4
+    waveEvery: 0.9,             // elke 0,9 s een nieuwe golf = een nieuw woord
+    speed: 5,                   // lagen per seconde
+    big: { i0: -22, i1: 30, j0: -30, j1: 30, links: 3 }, // het gigantische netwerk van stap 4
+  };
+  const LAST = NET.counts.length - 1;
+  const PERIOD = NET.speed * NET.waveEvery; // afstand tussen golven, in lagen
+
+  // Per stap: waar elke overgang naartoe beweegt (0..1) en hoe lang die duurt (s).
+  const TARGETS = {
+    1: { mix: 0, zoom: 0, bb: 0 },
+    2: { mix: 1, zoom: 0, bb: 0 },
+    3: { mix: 1, zoom: 1, bb: 0 },
+    4: { mix: 1, zoom: 1, bb: 1 },
+    5: { mix: 1, zoom: 0, bb: 0 },
+  };
+  const DURATION = { mix: 1.1, zoom: 2.2, bb: 2.8 };
+  const STEPS = Object.keys(TARGETS).length;
+
+  let W, H, S, box, net, inputs, outputs, cells, spawnAcc, emitAcc, glow, time;
+  let step = Math.max(1, Math.min(STEPS, parseInt(location.hash.slice(1), 10) || 1));
+  const T = { ...TARGETS[step] }; // huidige stand van mix, zoom en bb
+  let para = null, sentIdx = 0, lastWave = null;
+
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const pick = arr => arr[(Math.random() * arr.length) | 0];
+  const smooth = t => t * t * (3 - 2 * t);
+  const easeOut = t => 1 - Math.pow(1 - t, 3);
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const clamp01 = t => Math.max(0, Math.min(1, t));
+  function hash(a, b) {
+    let h = (Math.imul(a, 374761393) + Math.imul(b, 668265263)) | 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  }
+
+  // ---- Netwerk: opbouw in 'laag-eenheden' (i = laag, j = rij), los van het scherm ----
+  const small = [];   // het netwerk dat we bij stap 3 zien
+  NET.counts.forEach((n, i) => {
+    for (let k = 0; k < n; k++) small.push({ i, j: k - (n - 1) / 2, k, id: small.length, a: 0 });
+  });
+  const smallLinks = [];
+  small.forEach(a => small.forEach(b => { if (b.i === a.i + 1) smallLinks.push([a, b]); }));
+
+  const big = { i: [], j: [], a: [], links: [] }; // het netwerk eromheen (stap 4)
+  {
+    const B = NET.big;
+    const inSmall = (i, j) => i >= 0 && i <= LAST && Math.abs(j) <= 5;
+    const index = new Map();
+    for (let i = B.i0; i <= B.i1; i++) for (let j = B.j0; j <= B.j1; j++) {
+      if (inSmall(i, j)) continue;
+      index.set(i * 1000 + j, big.i.length);
+      // Iets verschoven t.o.v. het raster: oogt meer als een organische massa.
+      big.i.push(i + rand(-0.3, 0.3)); big.j.push(j + rand(-0.35, 0.35)); big.a.push(0);
+    }
+    for (let n = 0; n < big.i.length; n++) {
+      for (let l = 0; l < B.links; l++) {
+        const j2 = Math.round(big.j[n]) + Math.round(rand(-3, 3));
+        const m = index.get((Math.round(big.i[n]) + 1) * 1000 + j2);
+        if (m !== undefined) big.links.push(n, m);
+      }
+    }
+    big.links = Int32Array.from(big.links);
+  }
+
+  // Activatie van een neuron: een golf trekt met vaste snelheid door de lagen;
+  // per golf licht een ander (vast) patroon van neuronen op.
+  function activation(i, id, t) {
+    const ph = t * NET.speed - i;
+    const k = Math.floor(ph / PERIOD);
+    const d = ph - k * PERIOD;                  // hoe lang geleden de vorige golf hier was (in lagen)
+    const pat = w => (hash(id, w) > 0.5 ? 0.6 + 0.4 * hash(w, id + 7) : 0.04);
+    const tail = Math.exp(-d / 0.7) * pat(k);
+    const lead = Math.exp(-Math.pow((d - PERIOD) / 0.3, 2)) * pat(k + 1);
+    return Math.max(tail, lead);
+  }
+  // In de laatste laag wint per golf precies één neuron: dat is het gekozen woord.
+  const chosenOutput = k => (hash(k, 99) * NET.counts[LAST]) | 0;
+  function outputActivation(k, t) {
+    const ph = t * NET.speed - LAST;
+    const w = Math.floor(ph / PERIOD);
+    const d = ph - w * PERIOD;
+    const tail = Math.exp(-d / 0.9) * (chosenOutput(w) === k ? 1 : 0.1);
+    const lead = Math.exp(-Math.pow((d - PERIOD) / 0.3, 2)) * (chosenOutput(w + 1) === k ? 1 : 0.1);
+    return Math.max(tail, lead);
+  }
+
+  function layout() {
+    const dpr = window.devicePixelRatio || 1;
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    S = Math.min(W / 1920, H / 1080); // schaal t.o.v. 1080p
+    const bw = 380 * S, bh = 380 * S;
+    box = { x: W / 2 - bw / 2, y: H / 2 - bh / 2, w: bw, h: bh, r: 28 * S };
+    box.cx = W / 2; box.cy = H / 2;
+    net = { cx: 0.38 * W, dx: (0.56 * W) / LAST, dy: Math.min(0.085 * H, 95 * S), r: 13 * S };
+
+    // Raster van vage stipjes in de doos die kort oplichten.
+    cells = [];
+    const n = 6, pad = 64 * S;
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+      cells.push({
+        x: box.x + pad + (i * (bw - 2 * pad)) / (n - 1),
+        y: box.y + pad + (j * (bh - 2 * pad)) / (n - 1),
+        a: 0,
+      });
+    }
+    inputs = []; outputs = [];
+    spawnAcc = 0; emitAcc = 0; glow = 0; time = 0; lastWave = null;
+    sentIdx = 0;
+    para = newParagraph(0.2);
+    for (let t = 0; t < 12; t += 1 / 60) update(1 / 60); // voorverwarmen: scherm is direct gevuld
+  }
+
+  // ---- Camera ----
+  const camZ = () => Math.pow(NET.zoom, smooth(T.zoom));
+  const netZoom = () => Math.pow(NET.blackBoxZoom, smooth(T.bb));
+  // Schermpositie van neuron (i, j): eerst de uitzoom van stap 4 rond het netwerk,
+  // daarna de camera-zoom rond het midden van het scherm (zodat het netwerk 'in' de doos zit).
+  function netPoint(i, j) {
+    const k = camZ() / NET.zoom, n = netZoom();
+    return [
+      W / 2 + (net.cx + (i - LAST / 2) * net.dx * n - W / 2) * k,
+      H / 2 + j * net.dy * n * k,
+    ];
+  }
+  function setCamera() {
+    const dpr = window.devicePixelRatio || 1, z = camZ();
+    ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * (W / 2 - box.cx * z), dpr * (H / 2 - box.cy * z));
+  }
+  function setScreen() {
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function spawnInput() {
+    const isNoise = Math.random() < 0.25;
+    const shape = pick(IN_SHAPES);
+    const isCode = Math.random() < 0.15;
+    inputs.push({
+      x: -40 * S,
+      x0: -40 * S,
+      y0: rand(0.06, 0.94) * H,
+      yT: box.cy + rand(-0.38, 0.38) * box.h,
+      speed: rand(150, 300) * S,
+      size: rand(5, 13) * S * (shape === 'dot' ? 0.5 : 1),
+      shape,
+      text: isCode ? pick(CODE_FRAGMENTS) : pick(FRAGMENTS),
+      mono: isCode,
+      fontSize: rand(13, 22) * S,
+      color: isNoise ? C.noise : pick(C.cats),
+      rot: rand(0, Math.PI * 2),
+      spin: rand(-2.5, 2.5),
+      tilt: rand(-0.12, 0.12),
+      wob: rand(10, 45) * S,
+      wobF: rand(1.5, 4),
+      phase: rand(0, Math.PI * 2),
+      alpha: rand(0.55, 1),
+      y: 0,
+    });
+  }
+
+  function emitColumn() {
+    LANES.forEach((lane, i) => {
+      outputs.push({
+        x: box.x + box.w - 30 * S,
+        y: box.cy + (i - 1) * 105 * S,
+        speed: 130 * S,
+        size: 22 * S,
+        lane,
+        grow: 0,
+      });
+    });
+    if (step === 1) glow = Math.min(1, glow + 0.5);
+  }
+
+  // Verdeel een zin over regels: geeft per woord de x-offset en regel terug.
+  function wrap(words, fs, maxW) {
+    ctx.font = `500 ${fs}px ${C.font}`;
+    const space = ctx.measureText(' ').width;
+    const out = [];
+    let line = 0, lineW = 0;
+    for (const text of words) {
+      const w = ctx.measureText(text).width;
+      if (lineW > 0 && lineW + space + w > maxW) { line++; lineW = 0; }
+      out.push({ w, ox: lineW ? lineW + space : 0, line });
+      lineW += (lineW ? space : 0) + w;
+    }
+    return { items: out, lines: line + 1 };
+  }
+
+  // Zet de volgende zin klaar. Elk woord krijgt twee plekken: naast de doos (stap 2)
+  // en aan de rand van het scherm, naast het netwerk (stap 3–4).
+  function newParagraph(delay) {
+    const words = SENTENCES[sentIdx++ % SENTENCES.length].split(' ');
+    const fs = 44 * S, efs = 32 * S;
+    const left = box.x + box.w + 90 * S, eleft = 0.75 * W;
+    const a = wrap(words, fs, W - left - 80 * S);
+    const b = wrap(words, efs, W - eleft - 60 * S);
+    const top = box.cy - ((a.lines - 1) * fs * 1.35) / 2;
+    const etop = H / 2 - ((b.lines - 1) * efs * 1.35) / 2;
+    return {
+      words: words.map((text, n) => ({
+        text,
+        w: a.items[n].w, tx: left + a.items[n].ox, ty: top + a.items[n].line * fs * 1.35,
+        ew: b.items[n].w, ex: eleft + b.items[n].ox, ey: etop + b.items[n].line * efs * 1.35,
+        t: -1, out: 0,
+      })),
+      fs, efs, shown: 0, timer: delay, state: 'typing', hold: 0, alpha: 1,
+    };
+  }
+
+  function updateParagraph(dt, netMode, wave) {
+    const p = para;
+    for (const w of p.words) if (w.t >= 0) w.t = Math.min(1, w.t + dt / 0.6);
+    if (p.state === 'typing') {
+      // In het netwerk levert elke golf een woord op; daarbuiten gaat het op een vaste maat.
+      let emit = false;
+      if (netMode) emit = wave !== null;
+      else { p.timer -= dt; if (p.timer <= 0) { emit = true; p.timer = WORD_EVERY; } }
+      if (emit && p.shown < p.words.length) {
+        const w = p.words[p.shown++];
+        w.t = 0;
+        w.out = netMode ? chosenOutput(wave) : (Math.random() * NET.counts[LAST]) | 0;
+        glow = Math.min(1, glow + 0.45);
+      }
+      if (p.shown === p.words.length && p.words[p.shown - 1].t >= 1) { p.state = 'hold'; p.hold = 3.2; }
+    } else if (p.state === 'hold') {
+      p.hold -= dt;
+      if (p.hold <= 0) p.state = 'fade';
+    } else {
+      p.alpha -= dt / 0.7;
+      if (p.alpha <= 0) para = newParagraph(0.5);
+    }
+  }
+
+  function update(dt) {
+    time += dt;
+    const target = TARGETS[step];
+    for (const key in T) {
+      const d = target[key] - T[key];
+      T[key] += Math.sign(d) * Math.min(Math.abs(d), dt / DURATION[key]);
+    }
+    const m = smooth(T.mix);
+
+    spawnAcc += dt * lerp(INPUT_PER_SEC[0], INPUT_PER_SEC[1], m);
+    while (spawnAcc >= 1) { spawnInput(); spawnAcc--; }
+    emitAcc += dt;
+    if (emitAcc >= OUTPUT_EVERY) { emitColumn(); emitAcc -= OUTPUT_EVERY; }
+
+    // Welke golf heeft net de laatste laag bereikt?
+    const k = Math.floor((time * NET.speed - LAST) / PERIOD);
+    const wave = lastWave !== null && k !== lastWave ? k : null;
+    lastWave = k;
+    if (step >= 2) updateParagraph(dt, target.zoom === 1 && T.zoom > 0.6, wave);
+
+    const endX = box.x + 20 * S;
+    for (let i = inputs.length - 1; i >= 0; i--) {
+      const p = inputs[i];
+      p.x += p.speed * dt;
+      p.rot += p.spin * dt;
+      const prog = Math.min(1, Math.max(0, (p.x - p.x0) / (box.x - p.x0)));
+      // Rommelig onderweg, maar alles trekt naar de doos toe.
+      p.y = p.y0 + (p.yT - p.y0) * smooth(prog)
+          + Math.sin(time * p.wobF + p.phase) * p.wob * (1 - prog);
+      if (p.x > endX) {
+        inputs.splice(i, 1);
+        pick(cells).a = 1;
+        glow = Math.min(1, glow + 0.012);
+      }
+    }
+
+    for (let i = outputs.length - 1; i >= 0; i--) {
+      const o = outputs[i];
+      o.x += o.speed * dt;
+      o.grow = Math.min(1, o.grow + dt * 2.5);
+      if (o.x > W + 60 * S) outputs.splice(i, 1);
+    }
+
+    for (const c of cells) c.a = Math.max(0, c.a - dt * 1.6);
+    glow = Math.max(0, glow - dt * 0.8);
+  }
+
+  // ---- Tekenen ----
+  function shapePath(shape, s) {
+    ctx.beginPath();
+    switch (shape) {
+      case 'circle': case 'dot': case 'ring': ctx.arc(0, 0, s, 0, Math.PI * 2); break;
+      case 'square': ctx.rect(-s, -s, s * 2, s * 2); break;
+      case 'triangle':
+        ctx.moveTo(0, -s * 1.15); ctx.lineTo(s * 1.1, s * 0.75); ctx.lineTo(-s * 1.1, s * 0.75);
+        ctx.closePath(); break;
+    }
+  }
+
+  function drawShape(shape, x, y, s, rot, color, alpha) {
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(rot);
+    ctx.globalAlpha = alpha;
+    if (shape === '0' || shape === '1') {
+      ctx.fillStyle = color;
+      ctx.font = `600 ${s * 2.2}px ${C.mono}`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(shape, 0, 0);
+    } else if (shape === 'ring') {
+      shapePath(shape, s); ctx.strokeStyle = color; ctx.lineWidth = Math.max(1.5, s * 0.3); ctx.stroke();
+    } else {
+      shapePath(shape, s); ctx.fillStyle = color; ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawFragment(p, alpha) {
+    ctx.save();
+    ctx.translate(p.x, p.y); ctx.rotate(p.tilt);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.font = `${p.mono ? 500 : 400} ${p.fontSize}px ${p.mono ? C.mono : C.font}`;
+    // Rechts uitgelijnd: het fragment glijdt met de kop eerst de doos in.
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    ctx.fillText(p.text, 0, 0);
+    ctx.restore();
+  }
+
+  // Woorden worden in schermcoördinaten getekend en bewegen mee van 'naast de doos'
+  // naar 'aan de rand naast het netwerk' als we inzoomen.
+  function drawParagraph(alpha) {
+    if (alpha <= 0.01) return;
+    const p = para, z = camZ(), b = easeOut(smooth(T.zoom));
+    const toScreen = (x, y) => [W / 2 + (x - box.cx) * z, H / 2 + (y - box.cy) * z];
+    const [bx, by] = toScreen(box.x + box.w - 20 * S, box.cy);
+    const pos = w => {
+      const [nx, ny] = toScreen(w.tx + w.w / 2, w.ty);
+      return [lerp(nx, w.ex + w.ew / 2, b), lerp(ny, w.ey, b), lerp(p.fs * z, p.efs, b), lerp(w.w * z, w.ew, b)];
+    };
+    ctx.save();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    let last = null;
+    for (const w of p.words) {
+      if (w.t < 0) continue;
+      const [x, y, fs] = pos(w);
+      // Eerst vliegt een lichtpuntje van het model (of het gekozen output-neuron) naar het woord...
+      if (w.t < 0.45) {
+        const o = small.find(n => n.i === LAST && n.k === w.out);
+        const [ox, oy] = netPoint(o.i, o.j);
+        const e = smooth(w.t / 0.45);
+        ctx.save();
+        ctx.globalAlpha = alpha * Math.sin(Math.PI * Math.min(1, w.t / 0.45 + 0.15));
+        ctx.fillStyle = C.glow;
+        ctx.shadowColor = C.glow;
+        ctx.shadowBlur = 14 * S;
+        ctx.beginPath();
+        ctx.arc(lerp(lerp(bx, ox, b), x, e), lerp(lerp(by, oy, b), y, e), 5 * S, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+      // ...en daar ploft het woord op.
+      if (w.t >= 0.35) {
+        const e = easeOut((w.t - 0.35) / 0.65);
+        ctx.globalAlpha = alpha * e;
+        ctx.fillStyle = C.outText;
+        ctx.font = `500 ${fs * lerp(0.7, 1, e)}px ${C.font}`;
+        ctx.fillText(w.text, x, y);
+      }
+      if (w.t >= 1) last = w;
+    }
+    // Knipperende cursor achter het laatste geplaatste woord.
+    if (p.state !== 'fade' && Math.sin(time * 6) > -0.2) {
+      const ref = last || p.words[0];
+      const [x, y, fs, ww] = pos(ref);
+      const cx = last ? x + ww / 2 + 10 * S : x - ww / 2;
+      ctx.globalAlpha = alpha * 0.9;
+      ctx.fillStyle = C.glow;
+      ctx.fillRect(cx, y - fs * 0.45, 4 * S, fs * 0.9);
+    }
+    ctx.restore();
+  }
+
+  function drawNetwork(alpha) {
+    if (alpha <= 0.01) return;
+    const k = camZ() / NET.zoom, n = netZoom();
+    const r = Math.max(1.1, net.r * n * k);
+    const bigAlpha = alpha * smooth(clamp01(T.bb * 3));
+
+    // Bij het inzoomen blijft het netwerk binnen de randen van de doos.
+    const z = camZ();
+    ctx.save();
+    roundRect(W / 2 + (box.x - box.cx) * z, H / 2 + (box.y - box.cy) * z, box.w * z, box.h * z, box.r * z);
+    ctx.clip();
+
+    // Stap 4: het gigantische netwerk eromheen.
+    if (bigAlpha > 0.01) {
+      const px = new Float32Array(big.i.length), py = new Float32Array(big.i.length);
+      for (let q = 0; q < big.i.length; q++) {
+        const [x, y] = netPoint(big.i[q], big.j[q]);
+        px[q] = x; py[q] = y;
+        // Eigen willekeurige timing per neuron: één flikkerende, onleesbare massa.
+        big.a[q] = activation(big.i[q] + hash(q, 3) * PERIOD, 1000 + q, time + hash(q, 5) * 7);
+      }
+      const on = (x, y) => x > -20 && x < W + 20 && y > -20 && y < H + 20;
+      ctx.globalAlpha = bigAlpha * 0.4;
+      ctx.strokeStyle = C.boxStroke;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let l = 0; l < big.links.length; l += 2) {
+        const a = big.links[l], b = big.links[l + 1];
+        if (!on(px[a], py[a]) && !on(px[b], py[b])) continue;
+        ctx.moveTo(px[a], py[a]); ctx.lineTo(px[b], py[b]);
+      }
+      ctx.stroke();
+      ctx.globalAlpha = bigAlpha * 0.5;
+      ctx.fillStyle = C.boxStroke;
+      ctx.beginPath();
+      for (let q = 0; q < big.i.length; q++) {
+        if (!on(px[q], py[q])) continue;
+        ctx.moveTo(px[q] + r, py[q]); ctx.arc(px[q], py[q], r, 0, Math.PI * 2);
+      }
+      ctx.fill();
+      ctx.fillStyle = C.glow;
+      for (let q = 0; q < big.i.length; q++) {
+        if (big.a[q] < 0.06 || !on(px[q], py[q])) continue;
+        ctx.globalAlpha = bigAlpha * Math.min(1, big.a[q] * 1.6);
+        ctx.beginPath(); ctx.arc(px[q], py[q], r * 1.3, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+    // Stap 3: het netwerk waar we op inzoomen.
+    for (const nd of small) {
+      [nd.x, nd.y] = netPoint(nd.i, nd.j);
+      nd.a = nd.i === LAST ? outputActivation(nd.k, time) : activation(nd.i, nd.id, time);
+    }
+    // Bij stap 4: een kader om 'het stukje dat we net zagen'.
+    if (bigAlpha > 0.01) {
+      const [x0, y0] = netPoint(-0.6, -5.2), [x1, y1] = netPoint(LAST + 0.6, 5.2);
+      ctx.globalAlpha = bigAlpha * 0.8;
+      ctx.fillStyle = C.boxFill;
+      roundRect(x0, y0, x1 - x0, y1 - y0, 10 * S);
+      ctx.fill();
+      ctx.strokeStyle = C.glow;
+      ctx.lineWidth = 2 * S;
+      ctx.stroke();
+    }
+    ctx.lineWidth = Math.max(0.6, 1.5 * S * Math.sqrt(n));
+    ctx.globalAlpha = alpha * 0.5;
+    ctx.strokeStyle = C.boxStroke;
+    ctx.beginPath();
+    for (const [a, b] of smallLinks) { ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); }
+    ctx.stroke();
+    ctx.strokeStyle = C.glow;
+    for (const [a, b] of smallLinks) {
+      const s = Math.sqrt(a.a * b.a);
+      if (s < 0.12) continue;
+      ctx.globalAlpha = alpha * Math.min(1, s * 1.1);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
+    for (const nd of small) {
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = C.boxFill;
+      ctx.strokeStyle = C.boxStroke;
+      ctx.lineWidth = Math.max(0.6, 2 * S * n);
+      ctx.beginPath(); ctx.arc(nd.x, nd.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      if (nd.a > 0.05) {
+        ctx.save();
+        ctx.globalAlpha = alpha * nd.a;
+        ctx.fillStyle = C.glow;
+        ctx.shadowColor = C.glow;
+        ctx.shadowBlur = 22 * S * nd.a * n;
+        ctx.beginPath(); ctx.arc(nd.x, nd.y, r, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    // Stap 4: rechts uitfaden, zodat de zin leesbaar blijft boven de massa.
+    if (bigAlpha > 0.01) {
+      const g = ctx.createLinearGradient(0.56 * W, 0, 0.76 * W, 0);
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(1, C.boxFill);
+      ctx.globalAlpha = bigAlpha;
+      ctx.fillStyle = g;
+      ctx.fillRect(0.56 * W, 0, 0.44 * W, H);
+    }
+    ctx.restore();
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function drawLabel(text, alpha) {
+    if (alpha <= 0.01) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = C.label;
+    ctx.font = `500 ${40 * S}px ${C.font}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(text, box.cx, box.y + box.h + 36 * S);
+    ctx.restore();
+  }
+
+  function draw() {
+    setScreen();
+    ctx.clearRect(0, 0, W, H);
+    const m = smooth(T.mix);
+    const netAlpha = smooth(clamp01((T.zoom - 0.45) / 0.55));
+
+    // Uitvoer en invoer eerst, zodat ze achter de doos in- en uitglijden.
+    setCamera();
+    if (m < 1) for (const o of outputs) {
+      drawShape(o.lane.shape, o.x, o.y, o.size * smooth(o.grow), 0, o.lane.color, 1 - m);
+    }
+    setScreen();
+    drawParagraph(m * para.alpha * (1 - netAlpha));
+    setCamera();
+    for (const p of inputs) {
+      if (m < 1) drawShape(p.shape, p.x, p.y, p.size, p.rot, p.color, p.alpha * (1 - m));
+      if (m > 0) drawFragment(p, p.alpha * m);
+    }
+
+    // De doos: rustig ademende gloed + extra oplichten bij activiteit.
+    const breathe = 0.5 + 0.5 * Math.sin(time * 1.4);
+    ctx.save();
+    roundRect(box.x, box.y, box.w, box.h, box.r);
+    ctx.shadowColor = C.glow;
+    ctx.shadowBlur = (18 + 14 * breathe + 40 * glow) * S * camZ();
+    ctx.fillStyle = C.boxFill;
+    ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    roundRect(box.x, box.y, box.w, box.h, box.r);
+    ctx.lineWidth = 2 * S;
+    ctx.strokeStyle = C.boxStroke;
+    ctx.stroke();
+    ctx.globalAlpha = 0.25 + 0.5 * glow;
+    ctx.strokeStyle = C.glow;
+    ctx.stroke();
+    ctx.restore();
+
+    // De stipjes in de doos maken plaats voor het echte netwerk.
+    for (const c of cells) {
+      ctx.save();
+      ctx.globalAlpha = (0.12 + 0.75 * c.a) * (1 - netAlpha);
+      ctx.fillStyle = c.a > 0.02 ? C.glow : C.boxStroke;
+      ctx.shadowColor = C.glow;
+      ctx.shadowBlur = 12 * S * c.a;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, (3 + 2.5 * c.a) * S, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Labels na elkaar wisselen, niet door elkaar heen.
+    drawLabel('AI-model', Math.max(0, 1 - 2 * m));
+    drawLabel('LLM', Math.max(0, 2 * m - 1));
+
+    setScreen();
+    drawNetwork(netAlpha);
+    // De zin opnieuw bovenop het netwerk, zodra die aan de rand staat.
+    if (netAlpha > 0.01) drawParagraph(m * para.alpha * netAlpha);
+  }
+
+  function setStep(n) {
+    n = Math.max(1, Math.min(STEPS, n));
+    if (n === step) return;
+    if (n === 2 && step === 1) { // altijd beginnen bij de eerste zin, zodra de morph bijna klaar is
+      sentIdx = 0;
+      para = newParagraph(DURATION.mix * 0.8);
+    }
+    step = n;
+    history.replaceState(null, '', '#' + n);
+  }
+  window.scene = { setStep, next: () => setStep(step + 1), prev: () => setStep(step - 1), get step() { return step; } };
+
+  let last = performance.now(), paused = false;
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    if (!paused) update(dt);
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  addEventListener('keydown', e => {
+    if (['ArrowRight', 'PageDown', 'ArrowDown'].includes(e.key)) window.scene.next();
+    else if (['ArrowLeft', 'PageUp', 'ArrowUp'].includes(e.key)) window.scene.prev();
+    else if (e.key === 'p' || e.key === 'P') paused = !paused; // pauze, handig tijdens het oefenen
+  });
+  addEventListener('click', () => window.scene.next());
+  addEventListener('resize', layout);
+  layout();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
