@@ -561,10 +561,12 @@
     }
 
     // Stap 4: rechts uitfaden, zodat de zin leesbaar blijft boven de massa.
+    // Uitgummen naar transparant in plaats van overschilderen, zodat elke achtergrond er zuiver doorheen komt.
     if (bigAlpha > 0.01) {
       const g = ctx.createLinearGradient(0.56 * W, 0, 0.76 * W, 0);
       g.addColorStop(0, 'rgba(0,0,0,0)');
-      g.addColorStop(1, C.boxFill);
+      g.addColorStop(1, 'rgba(0,0,0,1)');
+      ctx.globalCompositeOperation = 'destination-out';
       ctx.globalAlpha = bigAlpha;
       ctx.fillStyle = g;
       ctx.fillRect(0.56 * W, 0, 0.44 * W, H);

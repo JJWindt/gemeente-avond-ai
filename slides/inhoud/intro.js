@@ -17,16 +17,21 @@ window.SLIDES = (window.SLIDES || []).concat([
       ['Onderwijs', 'Raad van State buigt zich over AI-fraude bij scripties', 'De bronnen bleken door AI verzonnen'],
       ['Energie', 'Datacenters gebruiken dit jaar 5 keer zoveel stroom als heel Nederland', 'Gartner'],
     ],
-    notes: '“Wie het nieuws volgt, ziet het overal. Startersbanen halveren. Jongeren die hun hart luchten bij een chatbot in plaats van bij hun ouders. […]” NB: de spreektekst noemt nog “een man die 1,2 miljoen kwijtraakt”; op de slide staat de Arup-kop (25,5 miljoen dollar via een nep-videogesprek). De koppen komen vanzelf een voor een op.' },
-  // 80 miljard in een half jaar (181 dagen) ≈ 442 miljoen per dag.
+    notes: '“Wie het nieuws volgt, ziet het overal. Startersbanen halveren. Jongeren die hun hart luchten bij een chatbot in plaats van bij hun ouders. […]” NB: de spreektekst noemt nog “een man die 1,2 miljoen kwijtraakt”; op de slide staat de Arup-kop (25,5 miljoen dollar via een nep-videogesprek). De eerste kop staat er meteen; elke klik voegt een kop toe.' },
+  // Nettoverlies $80,7 miljard, waarvan ~72 miljard boekhoudkundig; uitgaven aan rekenkracht en infrastructuur bijna 9 miljard (S-1).
   { type: 'loss', sub: 'Anthropic, de maker van Claude', n: 80, unit: 'miljard dollar verlies',
-    caption: 'in het eerste halfjaar van 2026.<br>Ruim 440 miljoen dollar per dag.',
-    notes: '“En kijk naar het geld. Een bedrijf van vijf jaar oud, dat dit jaar alleen al tientallen miljarden verlies maakte…” Op de achtergrond tekent zich een dalende koerslijn.' },
+    caption: 'in het eerste halfjaar van 2026.<br>Alleen al aan rekenkracht: 9 miljard.',
+    credit: 'Bron: beursprospectus (S-1) van Anthropic, via CNBC · nettoverlies $80,7 miljard',
+    notes: '“En kijk naar het geld. Een bedrijf van vijf jaar oud, dat dit jaar alleen al tientallen miljarden verlies maakte…” Op de achtergrond tekent zich een dalende koerslijn. NB: ongeveer 72 van de 80 miljard is een boekhoudkundige post (herwaardering van converteerbare leningen), geen geld dat echt is uitgegeven. Daarom noemt de onderregel de echte uitgaven: bijna 9 miljard dollar aan rekenkracht in een halfjaar, vier keer zoveel als een jaar eerder.' },
+  // Verwachte beurswaarde volgens de FT: $1,25–1,75 biljoen; het midden ($1,5 biljoen) omgerekend tegen ~1,15 dollar per euro.
+  // Bbp Nederland 2025: ~1.190 miljard euro (CBS: tekort 19 miljard = 1,6% bbp).
   { type: 'compare',
-    items: [['Anthropic', '2', 'biljoen dollar', 'beurswaarde in november,<br>een bedrijf van vijf jaar oud'],
+    items: [['Anthropic', '1,3', 'biljoen euro', 'verwachte beurswaarde,<br>een bedrijf van vijf jaar oud'],
             ['Nederland', '1,2', 'biljoen euro', 'alles wat ons land<br>in een jaar verdient']],
-    notes: '“…wordt deze maand op de beurs mogelijk meer waard dan alles wat heel Nederland in een jaar verdient.” Klik: Nederland erbij. “Zo groot is het geloof in wat AI gaat worden.”' },
+    credit: 'Bronnen: Financial Times (verwachte waardering $1,25–1,75 biljoen) · CBS (bbp 2025)',
+    notes: '“…wordt deze maand op de beurs mogelijk meer waard dan alles wat heel Nederland in een jaar verdient.” Klik: Nederland erbij. “Zo groot is het geloof in wat AI gaat worden.” NB: de verwachte waardering zakte in oktober/november van ~2 naar 1–1,75 biljoen dollar; check vlak voor de avond het laatste nieuws (beursgang gepland week voor Thanksgiving, kan schuiven).' },
   { type: 'statement', sub: 'Uit het eigen beursprospectus', text: 'Hun AI kan een risico zijn voor de mensheid.', accent: 'risico',
+    credit: 'Bron: beursprospectus (S-1) van Anthropic: AI “could pose catastrophic or existential risks to society”',
     notes: '“En in datzelfde beursprospectus waarschuwt het bedrijf zelf dat hun AI een risico voor de mensheid kan zijn.”' },
   { type: 'statement', center: true, text: 'Geen reden tot angst. Wel urgent.', accent: 'urgent', maxw: 1320,
     notes: '“Dit is geen hype die overwaait. Het raakt ons werk, onze kinderen en wat we nog als waar kunnen aannemen. Wij geloven niet dat AI een reden is om bang te zijn. Maar het is wel urgent. We willen jullie vanavond verwonderen, en tegelijk de magie eraf halen.”' },
@@ -39,7 +44,7 @@ window.SLIDES = (window.SLIDES || []).concat([
     items: [
       { h: 'Johannes', role: 'AI-engineer', note: 'Bachelor én master Artificial Intelligence',
         logoInk: 'coolblue.svg', logoInkH: 130, brand: 'linear-gradient(135deg, #0068c2 0%, #0090e3 55%, #36b0f7 100%)' },
-      { h: 'Vincent', role: 'Managing Director', note: 'Bouwde en verkocht twee bedrijven',
+      { h: 'Vincent', role: 'Managing Director', note: 'Bouwde en verkocht twee softwarebedrijven',
         logoInk: 'channable-stacked-wit.svg', logoInkH: 120, brand: 'linear-gradient(135deg, #1b1a3a 0%, #27418e 55%, #9e216d 100%)' },
       { h: 'Paul', role: 'De enige echte engineer', note: 'Bouwt met AI elke app in minuten',
         logoInk: 'boerma-media-wit.png', logoInkH: 92, brand: 'linear-gradient(135deg, #0b0b0b 0%, #1f1f1f 55%, #6a0d15 100%)' },
@@ -50,7 +55,7 @@ window.SLIDES = (window.SLIDES || []).concat([
   { type: 'agenda', sub: 'Vanavond',
     items: [['Deel 1', 'The state of AI', 'Wat is AI? Wat is een LLM? Wat kan het nu al?', '30 min'],
             ['Pauze', '', '', '15 min'],
-            ['Deel 2', 'Hoe kijken we hier als christenen naar?', 'Thema’s en een gespreksronde', '45 min'],
-            ['Deel 3', 'Praktisch', '', '']],
+            ['Deel 2', 'Hoe kijken we hier als christenen naar?', 'Thema’s en een gespreksronde', '60 min'],
+            ['Deel 3', 'Praktisch', 'Voorbeelden voor thuis, werk en kerk', '']],
     notes: '“We willen jullie vanavond twee dingen geven. In deel 1 laten we zien wat er nu al mogelijk is, en dat is meer dan de meesten denken. Maar we willen ook de magie eraf halen: als je snapt hoe het werkt, zie je ook wat het níet is. Daarom beginnen we met uitleg en demo’s. Na de pauze gaan we samen in gesprek: hoe kijken we hier als christenen naar? Daar hebben wij ook niet alle antwoorden op.” Deel 3 is praktisch en heeft geen eindtijd. → Johannes, deel 1.' },
 ]);

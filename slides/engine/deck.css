@@ -24,6 +24,12 @@ body.idle { cursor: none; }
 }
 #vis iframe.on { opacity: 1; visibility: visible; transition: opacity .7s ease .1s, visibility 0s; }
 #deck { width: 1920px; height: 1080px; transform-origin: 0 0; }
+/* Een losse presentatie (deel 2) over het hele scherm; die schaalt zichzelf. */
+iframe.embed {
+  position: fixed; inset: 0; z-index: 5; width: 100%; height: 100%; border: 0; background: var(--bg);
+  opacity: 0; visibility: hidden; transition: opacity .5s ease, visibility 0s .5s;
+}
+iframe.embed.on { opacity: 1; visibility: visible; transition: opacity .5s ease, visibility 0s; }
 
 
 /* ---------- Slide-basis (uit Daglicht) ---------- */
@@ -73,6 +79,8 @@ body.idle { cursor: none; }
 .number { font-size: 600px; line-height: .82; font-variant-numeric: tabular-nums; color: var(--accent); }
 .caption { margin: 56px 0 0; font-size: 58px; line-height: 1.2; color: var(--muted); font-weight: 500; letter-spacing: -0.02em; }
 .caption b { color: var(--fg); font-weight: 600; }
+/* Toelichting onder een statement */
+.st-body { max-width: 1560px; font-size: 54px; text-wrap: pretty; }
 .placeholder { margin: 0; font-size: 140px; font-weight: var(--hw); letter-spacing: var(--track); color: var(--line); }
 
 /* Ondertitel bij een visualisatie, onderaan */
@@ -120,7 +128,8 @@ body.idle { cursor: none; }
 
 /* Nieuwskoppen: krantenkolommen met een dunne lijn erboven */
 .t-headlines .content { padding: 120px 180px; }
-.t-headlines [data-a] { --stagger: .32s; }
+.slide .head[data-b] { transform: translateY(24px); transition: opacity .8s ease, transform .9s cubic-bezier(.22,.8,.2,1); }
+.slide .head[data-b].in { transform: none; }
 .heads { display: grid; grid-template-columns: repeat(3, 1fr); gap: 64px 64px; width: 100%; }
 .head { border-top: 2px solid var(--line); padding-top: 28px; }
 .head .tag { display: block; margin-bottom: 18px; font-size: 32px; font-weight: 600; color: var(--accent); }
@@ -244,6 +253,15 @@ body.idle { cursor: none; }
 .cursor { opacity: 0; }
 .slide.play .cursor { animation: blink 1s steps(1) infinite; animation-delay: var(--cd, 2s); }
 @keyframes grow { from { transform: scaleX(0); } to { transform: none; } }
+/* Agent: de lus; computer use: de muis schuift twee kaarten verder en klikt telkens */
+.loop-line { fill: none; stroke: var(--line); stroke-width: 3; }
+.slide.play .mouse { animation: mouse 3.2s cubic-bezier(.45,.05,.35,1) 1.6s both; }
+@keyframes mouse { 0% { transform: none; } 35%, 55% { transform: translate(260px, 0); } 90%, 100% { transform: translate(520px, 0); } }
+.ripple { opacity: 0; transform-box: fill-box; transform-origin: center; }
+.slide.play .ripple { animation: ripple .8s ease-out both; animation-delay: var(--rd); }
+@keyframes ripple { from { opacity: .8; transform: scale(.3); } to { opacity: 0; transform: scale(1.7); } }
+.slide.play .hit { animation: hit .5s ease-out both; animation-delay: var(--rd); }
+@keyframes hit { to { fill: var(--tint); stroke: var(--accent); } }
 @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0; } }
 
 /* Opbouw binnen een slide (volgende-toets) */
@@ -258,6 +276,12 @@ body.idle { cursor: none; }
 .slide .late { opacity: 0; }
 @keyframes draw { to { stroke-dashoffset: 0; } }
 @keyframes pop { from { opacity: 0; } to { opacity: 1; } }
+/* Grafiek met pauze: het tweede stuk lijn, de puntjes en het eindlabel komen pas bij de klik */
+.slide .line-b { opacity: 1; transition: none; }
+.slide.play .line-b, .slide.play .dot-b { animation: none; }
+.slide.play .line-b.in { animation: draw 1.6s linear .2s forwards; }
+.slide.play .dot-b.in { animation: pop .4s ease-out both; }
+.slide.play .late-b.in { animation: rise 1s cubic-bezier(.22,.8,.2,1) 1.9s both; }
 
 /* In het overzicht staat alles meteen stil en zichtbaar */
 .slide.still [data-a], .slide.still [data-b], .slide.still .dot, .slide.still .late, .slide.still .art-in { opacity: 1; animation: none; transform: none; }
@@ -266,6 +290,7 @@ body.idle { cursor: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .slide.play [data-a], .slide.play .line, .slide.play .dot, .slide.play .late,
+  .slide.play .line-b.in, .slide.play .dot-b.in, .slide.play .late-b.in,
   .slide.play .art-in, .slide.play .type-in { animation-duration: .01s !important; animation-delay: 0s !important; }
 }
 

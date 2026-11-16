@@ -217,9 +217,9 @@
     const color = C.kind[chip.kind];
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.font = `600 24px ${C.font}`;
-    const w = chip.label ? Math.max(96, ctx.measureText(chip.label).width + 30) : 96;
-    roundRect(x - w / 2, y - 22, w, 44, 22);
+    ctx.font = `600 28px ${C.font}`;
+    const w = chip.label ? Math.max(104, ctx.measureText(chip.label).width + 34) : 104;
+    roundRect(x - w / 2, y - 25, w, 50, 25);
     ctx.fillStyle = C.chipFill;
     ctx.shadowColor = color;
     ctx.shadowBlur = 16 * S;
@@ -317,7 +317,7 @@
     ctx.restore();
   }
 
-  function text(str, x, y, alpha, size = 28, align = 'center', weight = 500, color = C.label) {
+  function text(str, x, y, alpha, size = 34, align = 'center', weight = 500, color = C.label) {
     if (alpha <= 0.01) return;
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -346,15 +346,15 @@
 
     // De loop bouwt zich op; als de agent klaar is, wordt hij rustig.
     if (loop) {
-      const quiet = 1 - 0.5 * done;
+      const quiet = 1 - 0.25 * done;
       drawLane(P.loopOut, quiet, clamp01(reveal * 2));
       drawLane(P.loopBack, quiet, clamp01(reveal * 1.4 - 0.4));
       drawLane(P.result, 1, done);
-      const cap = g => reveal * quiet * (0.5 + 0.5 * g);
-      text('1   Tekst lezen', LLM.x + 22, (LLM.y + LLM.h / 2 + LOOP_Y) / 2, cap(glow.cap1), 30, 'left');
-      text('2   Tekst schrijven', (right(LLM) + left(ACT)) / 2, LLM.y - 30, cap(glow.cap2), 30);
-      text('3   Actie uitvoeren', ACT.x, LABEL_Y, cap(glow.cap3), 30);
-      text('↻  herhaal', (LLM.x + ACT.x) / 2, LOOP_Y + 40, reveal * quiet * 0.7, 28);
+      const cap = g => reveal * quiet * (0.8 + 0.2 * g);
+      text('1   Tekst lezen', LLM.x + 22, (LLM.y + LLM.h / 2 + LOOP_Y) / 2, cap(glow.cap1), 36, 'left');
+      text('2   Tekst schrijven', (right(LLM) + left(ACT)) / 2, LLM.y - 32, cap(glow.cap2), 36);
+      text('3   Actie uitvoeren', ACT.x, LABEL_Y, cap(glow.cap3), 36);
+      text('↻  herhaal', (LLM.x + ACT.x) / 2, LOOP_Y + 42, reveal * quiet * 0.9, 34);
     }
 
     // Tekstblokjes vóór de blokken, zodat ze erin verdwijnen.
